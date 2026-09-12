@@ -1,0 +1,19 @@
+# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Session data containing speech.
+# runs/*.jsonl holds timing metrics only and is safe to commit.
+# runs/*.text.jsonl holds transcripts and must never be committed.
+runs/*.text.jsonl
+runs/audio/
+
+# OS
+.DS_Store
+Thumbs.db

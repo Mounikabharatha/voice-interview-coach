@@ -1,0 +1,7 @@
+# Deliberately pure-Python with no native audio dependency: all audio capture and
+# playback happens in the browser, so this installs identically on Windows, Linux and macOS.
+fastapi==0.115.6
+uvicorn==0.34.0
+websockets==14.1
+httpx==0.28.1
+python-dotenv==1.0.1
