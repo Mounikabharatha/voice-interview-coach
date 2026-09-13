@@ -47,16 +47,33 @@ SILENCE_COMPLETE_MS = 900
 SILENCE_UNCLEAR_MS = 1500
 SILENCE_INCOMPLETE_MS = 2500
 
-# Words that almost always have more coming after them.
-TRAILING_CONTINUATIONS = frozenset(
+# Below this many words, a grammatically complete sentence is treated as the opening clause of
+# an answer rather than the whole thing. Tuned for behavioural interview answers, which run
+# 40-120 words; 20 is deliberately conservative.
+MIN_ANSWER_WORDS = 20
+
+# Words that CANNOT end an English sentence: conjunctions, articles, prepositions, fillers.
+# These override punctuation, and they have to, because the recogniser runs with automatic
+# punctuation on and cheerfully emits "...to a new payments provider, and." — period included —
+# for a candidate who is plainly mid-sentence. Trusting that period cut answers in half.
+NEVER_FINAL = frozenset(
     """
-    and but so or because since while although though however
-    which that who when where if then plus also
-    um uh er erm like basically actually
-    the a an my our their his her its your
-    to of for with from about into onto
-    was were is are been being had has have did do does
-    i we they he she it you
+    and but so or nor yet because since while although though however whereas
+    plus also therefore thus hence moreover furthermore
+    the a an my our their his her its your this these those
+    to of for with from about into onto upon than as at by
+    um uh er erm like basically actually literally
+    which when where if then whether
+    """.split()
+)
+
+# Usually mid-thought, but they genuinely can end a sentence — "That's it.", "I did it."
+# For these, punctuation is trusted, because the recogniser only emits it on falling intonation.
+WEAK_CONTINUATIONS = frozenset(
+    """
+    that who whom it they he she you we i
+    was were is are am been being had has have did do does
+    could would should might must can will
     """.split()
 )
 
@@ -64,19 +81,43 @@ _WORD = re.compile(r"[A-Za-z']+")
 
 
 def looks_complete(text: str) -> str:
-    """Classify a pending transcript as 'complete', 'incomplete' or 'unclear'."""
+    """Classify a pending transcript as 'complete', 'incomplete' or 'unclear'.
+
+    Order matters, and it is not the obvious one. `NEVER_FINAL` is checked before punctuation
+    precisely because the recogniser's punctuation is unreliable mid-answer; `WEAK_CONTINUATIONS`
+    is checked after, because there punctuation is the better signal.
+    """
     stripped = text.strip()
     if not stripped:
         return "incomplete"
-    # Terminal punctuation is checked FIRST and outranks the word test. Plenty of complete
-    # sentences end on a word that is usually a continuation — "That's it!", "I did it." —
-    # and the recogniser only emits that punctuation when it heard a falling, final
-    # intonation. Testing the word first misreads those as mid-thought.
+
+    words = _WORD.findall(stripped.lower())
+    last = words[-1] if words else ""
+
+    # Outranks punctuation: no English sentence ends on "and", whatever the recogniser wrote.
+    if last in NEVER_FINAL:
+        return "incomplete"
+
+    # Domain rule, and the one that does the real work here. A behavioural interview answer is
+    # a story: situation, action, result. Nobody tells one in twelve words. So a short,
+    # grammatically complete sentence is far more likely to be the first clause of an answer
+    # than the whole of it.
+    #
+    # This rule exists because the lexical rules above cannot fire. The recogniser segments on
+    # its own endpointing and punctuates what it emits, so a candidate who says
+    # "...to a new payments provider, and" then pauses is transcribed as
+    # "...to a new payments provider." — trailing conjunction deleted, period added. The
+    # evidence of being mid-sentence is destroyed before this code ever sees the text.
+    #
+    # Length is the signal that survives that. It is a blunt instrument, and the honest fix is
+    # a semantic turn detector that judges completeness from the audio; see the README.
+    if len(words) < MIN_ANSWER_WORDS:
+        return "incomplete"
+
     if stripped[-1] in ".!?":
         return "complete"
-    words = _WORD.findall(stripped.lower())
-    if words and words[-1] in TRAILING_CONTINUATIONS:
-        return "incomplete"  # nobody finishes an answer on "and"
+    if last in WEAK_CONTINUATIONS:
+        return "incomplete"
     return "unclear"
 
 
@@ -123,10 +164,16 @@ class Endpointer:
     _speaking: bool = False
 
     def add_final(self, text: str) -> None:
-        """A recogniser final is a fragment of the turn, not the end of it."""
+        """A recogniser final is a fragment of the turn, not the end of it.
+
+        Deliberately does NOT reset the silence timer. A final arrives 300-500 ms *after* the
+        audio it describes — it is confirmation of speech that has already stopped, not
+        evidence of new speech. Resetting on it made every turn pay the recogniser's
+        finalisation latency on top of the silence threshold, roughly doubling the wait.
+        Silence is measured from the audio, which is the only signal that knows the truth.
+        """
         if text.strip():
             self._pending.append(text.strip())
-            self._silence_started = None  # new words cancel any silence run
 
     @property
     def pending_text(self) -> str:
@@ -177,3 +224,46 @@ class Endpointer:
         self._silence_started = None
         self._speech_ms = 0.0
         self._speaking = False
+
+
+@dataclass
+class BargeInDetector:
+    """Decides whether the user is talking over the coach.
+
+    Separate from `Endpointer` because the question is different. Endpointing asks "have they
+    finished?" and can afford to be patient. Barge-in asks "have they started?" and must be
+    fast — every millisecond of delay is the coach still talking over someone.
+
+    The hard part is not detecting speech, it is not detecting *the coach's own voice*
+    arriving back through the microphone. Three things guard against that:
+
+    1. The browser's acoustic echo canceller, which does most of the work.
+    2. A higher energy bar than normal endpointing — `speech_factor` here is deliberately
+       stricter, because residual echo is quieter than a real speaker.
+    3. `min_speech_ms`, so a cough, a keyboard click or one leaked syllable cannot cancel a
+       reply. This is the main reason the threshold is not simply "any frame above the floor".
+
+    Headphones remove the problem entirely, which is why the UI recommends them.
+    """
+
+    noise_floor: float = 120.0
+    speech_factor: float = 4.0      # stricter than Endpointer: residual echo is quiet
+    min_speech_ms: float = 240.0    # sustained, not a click
+
+    _speech_ms: float = 0.0
+
+    def feed(self, frame: bytes, frame_ms: float) -> bool:
+        """True the moment sustained speech is confirmed. Call only while the coach speaks."""
+        if frame_rms(frame) > self.noise_floor * self.speech_factor:
+            self._speech_ms += frame_ms
+            if self._speech_ms >= self.min_speech_ms:
+                self._speech_ms = 0.0
+                return True
+        else:
+            # Decay rather than reset: real speech has gaps between words, and a hard reset
+            # on the first quiet frame makes the detector miss anyone speaking slowly.
+            self._speech_ms = max(0.0, self._speech_ms - frame_ms * 0.5)
+        return False
+
+    def reset(self) -> None:
+        self._speech_ms = 0.0

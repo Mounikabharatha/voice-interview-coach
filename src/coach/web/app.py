@@ -14,8 +14,9 @@ Wire protocol, v1:
 
 Turn detection belongs to `pipeline/endpoint.py`. Recogniser finals are treated as
 *fragments* of an answer, and the turn ends only after a run of silence whose required length
-depends on whether the text sounds finished. Barge-in — interrupting the coach mid-sentence —
-is not implemented here; endpointing is suspended while the coach speaks.
+depends on whether the text sounds finished. While the coach is speaking, `BargeInDetector`
+watches for the user talking over it and cancels the turn — the client is told to drop audio
+it has already scheduled, since the server cannot unsend it.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import Settings
 from ..llm.groq import GroqLLM
-from ..pipeline.endpoint import Endpointer
+from ..pipeline.endpoint import BargeInDetector, Endpointer
 from ..pipeline.turn import TurnController
 from ..stt.nvidia import NvidiaSTT
 from ..tts.nvidia import NvidiaTTS
@@ -96,6 +97,7 @@ async def ws(websocket: WebSocket) -> None:
             yield frame
 
     endpointer = Endpointer()
+    barge_in = BargeInDetector()
     responding = False
 
     async def transcribe() -> None:
@@ -132,6 +134,11 @@ async def ws(websocket: WebSocket) -> None:
             })
             await send_event({"type": "state", "state": "thinking"})
             await controller.respond(decision.text)
+        except asyncio.CancelledError:
+            # Barge-in. Expected, not an error. TurnController's own finally block has
+            # already closed the LLM stream and recorded what was said.
+            with contextlib.suppress(Exception):
+                await send_event({"type": "interrupted"})
         except Exception as exc:
             log.exception("turn failed")
             with contextlib.suppress(Exception):
@@ -139,6 +146,7 @@ async def ws(websocket: WebSocket) -> None:
         finally:
             responding = False
             endpointer.reset()
+            barge_in.reset()
             with contextlib.suppress(Exception):
                 await send_event({"type": "state", "state": "listening"})
 
@@ -155,12 +163,18 @@ async def ws(websocket: WebSocket) -> None:
             if (data := message.get("bytes")) is None:
                 continue
             await audio_in.put(data)
-            # Endpointing pauses while the coach is speaking. Without barge-in there is
-            # nothing useful to do with speech during playback, and the coach's own voice
-            # leaking through the mic would otherwise trigger a turn. Step 10 changes this.
             if responding:
+                # The coach is talking. Watch for the user talking over it.
+                if barge_in.feed(data, MIC_FRAME_MS) and turn_task and not turn_task.done():
+                    log.info("barge-in")
+                    turn_task.cancel()
+                    # Tell the client first: it has audio already scheduled on the device
+                    # clock that the server cannot unsend, and it has to drop that itself.
+                    await send_event({"type": "cancel_audio"})
+                    endpointer.reset()
                 continue
             if (decision := endpointer.feed_audio(data, MIC_FRAME_MS)) is not None:
+                barge_in.reset()
                 turn_task = asyncio.create_task(handle_turn(decision))
     except WebSocketDisconnect:
         pass

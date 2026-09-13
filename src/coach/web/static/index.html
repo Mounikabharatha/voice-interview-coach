@@ -82,7 +82,7 @@
   <button id="start">Start</button>
   <button id="stop" class="stop" disabled>Stop</button>
   <div id="meter"><i></i></div>
-  <span class="hint" id="hint">headphones recommended</span>
+  <span class="hint" id="hint">headphones recommended — you can interrupt mid-sentence</span>
 </footer>
 
 <script>
@@ -93,6 +93,7 @@ const meterBar = document.querySelector("#meter i");
 
 let ws, audioCtx, micCtx, micStream, worklet;
 let playHead = 0;            // AudioContext time where the next chunk should start
+let scheduled = [];          // sources queued on the device clock, kept so barge-in can stop them
 let liveEl = null;           // the in-progress partial transcript bubble
 let turnStart = null;        // performance.now() when the user's turn ended
 
@@ -153,6 +154,20 @@ function playChunk(arrayBuffer) {
   }
   src.start(playHead);
   playHead += buf.duration;
+
+  // Audio scheduled ahead of `currentTime` is already committed to the device clock. The
+  // server cannot unsend it, so barge-in has to stop it here — keep a handle on every source
+  // until it has finished playing.
+  scheduled.push(src);
+  src.onended = () => { scheduled = scheduled.filter((s) => s !== src); };
+}
+
+/** Stop everything queued and drop the playback cursor back to now. */
+function cancelAudio() {
+  for (const src of scheduled) { try { src.stop(); } catch (e) {} }
+  scheduled = [];
+  playHead = audioCtx ? audioCtx.currentTime : 0;
+  turnStart = null;
 }
 
 async function start() {
@@ -201,6 +216,12 @@ async function start() {
     else if (m.type === "final") commitFinal(m.text, m.verdict, m.waited_ms);
     else if (m.type === "assistant_text") bubble("coach", "Coach", m.text);
     else if (m.type === "state") setState(m.state);
+    else if (m.type === "cancel_audio") cancelAudio();
+    else if (m.type === "interrupted") {
+      const last = log.querySelector(".msg.coach:last-of-type");
+      if (last) { const t = document.createElement("span");
+        t.className = "verdict incomplete"; t.textContent = "interrupted"; last.appendChild(t); }
+    }
     else if (m.type === "metrics") console.log("turn metrics", m.turn);
     else if (m.type === "error") bubble("coach", "Error", m.message).classList.add("err");
   };

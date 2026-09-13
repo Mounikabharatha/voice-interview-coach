@@ -68,8 +68,8 @@ reproduce them are in `scripts/`.
 |---|---|---|
 | LLM, first *speakable* token | **363 ms** | `qwen/qwen3.6-27b` with `reasoning_effort="none"` |
 | LLM, first token of any kind | 88 ms | but it is chain-of-thought — not speakable, so not the number that counts |
-| Speech synthesis, first audio byte (warm) | **198 ms** | NVIDIA Magpie over Riva gRPC |
-| Speech synthesis, first audio byte (cold) | 1,141 ms | why the connection is prewarmed at startup |
+| Speech synthesis, first audio byte (warm) | **200–800 ms** | NVIDIA Magpie over Riva gRPC — see the note on variance below |
+| Speech synthesis, first audio byte (cold) | 1,141–2,384 ms | why the connection is prewarmed at startup |
 | Speech recognition, first partial | 875 ms | partials stream while you speak |
 | Speech recognition, finalisation after speech ends | **286–569 ms** | varies run to run |
 
@@ -80,10 +80,64 @@ its own chain-of-thought — fast to arrive and impossible to speak. The honest 
 agent is time to first *speakable* token, and switching reasoning off moves it from unusable to
 363 ms.
 
-**Prewarming the speech connection is worth ~940 ms.** The TLS and HTTP/2 handshake is paid once;
-without prewarming it lands on the first thing the coach ever says.
+**Prewarming the speech connection is worth roughly a second.** The TLS and HTTP/2 handshake is
+paid once; without prewarming it lands on the first thing the coach ever says.
 
-Not yet measured: turn detection, and end-to-end latency through the browser.
+**Speech synthesis latency is not stable, and that is the finding.** An early run measured a
+warm first audio byte at 198 ms, repeatably, four calls in a row. Hours later the same code on
+the same connection measured 563–810 ms, and a cold call reached 2,384 ms. Re-measuring
+carefully — raw synchronous calls against the async wrapper, back to back — showed the wrapper
+costs almost nothing and the variance is service-side.
+
+Two things were chased and found not to exist: a suspected idle-connection timeout did not
+reproduce across 15 s and 25 s gaps, and gRPC keepalive made no measurable difference, so it
+was not added. A fix for a problem that is not there is worse than no fix.
+
+The practical consequence is that a single flattering measurement should not be designed
+around. Fixed lines the coach says often — the opening question, the move-on lines — are worth
+pre-rendering precisely because synthesis latency cannot be relied on.
+
+Not yet measured: end-to-end latency through the browser at the device clock.
+
+## Turn-taking, and where it is still weak
+
+Deciding when a candidate has *finished* is the hardest problem here, and it is not solved —
+it is traded off, deliberately, and the trade is worth understanding.
+
+The obvious approach fails. The speech recogniser emits a final transcript at every sentence
+end, so treating those as end-of-turn cuts people off mid-answer — which is exactly what
+candidates trigger, because they pause to recall a number or decide how much credit to claim.
+So finals are treated as *fragments*, and a turn ends only after measured silence.
+
+The second approach fails too, less obviously. The plan was to read the wording: nobody ends
+an answer on "and", so a trailing conjunction should buy extra patience. It does, when the word
+survives. But the recogniser segments on its own endpointing **and punctuates what it emits**,
+so a candidate who says
+
+> "…to a new payments provider, **and**" *[pauses to think]*
+
+is transcribed as `"…to a new payments provider."` — trailing conjunction deleted, period
+added. The evidence of being mid-sentence is destroyed upstream of any logic that could use it.
+
+What survives is length. A behavioural answer is a story — situation, action, result — and
+nobody tells one in twelve words, so a short grammatically complete sentence is far more likely
+to be an opening clause than a whole answer. That is the rule doing most of the work:
+
+| Pending text | Waits |
+|---|---|
+| Full-length and ends `.` `!` `?` | 900 ms |
+| Long, no terminal punctuation | 1,500 ms |
+| Ends on "and" / "the" / "um", **or under 20 words** | 2,500 ms |
+
+**The cost is real and it is not hidden.** Short exchanges — "Yes, that's right." — wait the
+full 2.5 s. For an interview coach that is the right way round, because being interrupted
+mid-answer is a much worse failure than a slow reply, but it does make quick back-and-forth
+feel sluggish.
+
+**The known better answer is semantic turn detection** — a small model that judges from the
+audio whether a turn sounds finished, rather than inferring it from a transcript that has
+already thrown the evidence away. That is the next real improvement, and it would replace the
+word-count rule entirely.
 
 ## Design notes
 
