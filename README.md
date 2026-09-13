@@ -19,7 +19,7 @@ two free keys, and it runs the same on Windows, Linux and macOS.
 git clone https://github.com/Mounikabharatha/voice-interview-coach
 cd voice-interview-coach
 python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements.txt                   # also installs the package itself
 cp .env.example .env                              # then paste your two keys into it
 python -m coach
 ```
