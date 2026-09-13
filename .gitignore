@@ -18,3 +18,7 @@ runs/audio/
 .DS_Store
 Thumbs.db
 .venv/
+
+# demo output
+out.wav
+*.wav
