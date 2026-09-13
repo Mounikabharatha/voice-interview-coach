@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Interview Coach</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b35;
+    --ink: #e8eaf0; --muted: #8b93a5; --accent: #5eead4; --warn: #fbbf24; --user: #93c5fd;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; gap: 1rem;
+    padding: .85rem 1.25rem; border-bottom: 1px solid var(--line); flex: none;
+  }
+  h1 { font-size: .95rem; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.listening { background: var(--accent); box-shadow: 0 0 0 4px rgba(94,234,212,.15); }
+  .dot.thinking  { background: var(--warn);   box-shadow: 0 0 0 4px rgba(251,191,36,.15); }
+  #status { color: var(--muted); font-size: .8rem; font-family: var(--mono); }
+  .spacer { margin-left: auto; }
+
+  #latency {
+    font-family: var(--mono); font-size: .78rem; color: var(--muted);
+    display: flex; gap: 1rem; align-items: baseline;
+  }
+  #latency b { color: var(--accent); font-size: 1.05rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  main { flex: 1; overflow-y: auto; padding: 1.5rem 1.25rem; }
+  .wrap { max-width: 46rem; margin: 0 auto; display: flex; flex-direction: column; gap: .9rem; }
+  .msg { padding: .7rem .95rem; border-radius: 10px; max-width: 85%; white-space: pre-wrap; }
+  .msg.coach { background: var(--panel); border: 1px solid var(--line); align-self: flex-start; }
+  .msg.you   { background: rgba(147,197,253,.08); border: 1px solid rgba(147,197,253,.25);
+               color: var(--user); align-self: flex-end; }
+  .msg.live  { opacity: .6; font-style: italic; }
+  .who { display: block; font-size: .65rem; text-transform: uppercase; letter-spacing: .1em;
+         color: var(--muted); margin-bottom: .25rem; }
+  .err { color: #fca5a5; font-family: var(--mono); font-size: .8rem; }
+
+  footer { padding: 1rem 1.25rem; border-top: 1px solid var(--line); flex: none;
+           display: flex; justify-content: center; gap: 1rem; align-items: center; }
+  button {
+    font: inherit; font-weight: 600; padding: .6rem 1.6rem; border-radius: 999px;
+    border: 1px solid var(--accent); background: var(--accent); color: #06231f; cursor: pointer;
+  }
+  button.stop { background: transparent; color: var(--ink); border-color: var(--line); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  #meter { width: 120px; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  #meter i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .06s; }
+  .hint { color: var(--muted); font-size: .8rem; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>Voice Interview Coach</h1>
+  <span id="status">idle</span>
+  <span class="spacer"></span>
+  <div id="latency"><span>reply</span> <b id="lat">—</b> <span>ms</span></div>
+</header>
+
+<main>
+  <div class="wrap" id="log">
+    <div class="msg coach"><span class="who">Coach</span>Press Start, allow the microphone, and answer out loud. Your words appear here as you speak.</div>
+  </div>
+</main>
+
+<footer>
+  <button id="start">Start</button>
+  <button id="stop" class="stop" disabled>Stop</button>
+  <div id="meter"><i></i></div>
+  <span class="hint" id="hint">headphones recommended</span>
+</footer>
+
+<script>
+const PLAYBACK_RATE = 44100;
+const $ = (id) => document.getElementById(id);
+const log = $("log"), dot = $("dot"), statusEl = $("status"), latEl = $("lat");
+const meterBar = document.querySelector("#meter i");
+
+let ws, audioCtx, micCtx, micStream, worklet;
+let playHead = 0;            // AudioContext time where the next chunk should start
+let liveEl = null;           // the in-progress partial transcript bubble
+let turnStart = null;        // performance.now() when the user's turn ended
+
+function setState(s) {
+  statusEl.textContent = s;
+  dot.className = "dot" + (s === "listening" ? " listening" : s === "thinking" ? " thinking" : "");
+}
+
+function bubble(cls, who, text) {
+  const el = document.createElement("div");
+  el.className = "msg " + cls;
+  el.innerHTML = `<span class="who">${who}</span>`;
+  el.appendChild(document.createTextNode(text));
+  log.appendChild(el);
+  el.scrollIntoView({ block: "end" });
+  return el;
+}
+
+function showPartial(text) {
+  if (!liveEl) liveEl = bubble("you live", "You", text);
+  else liveEl.lastChild.nodeValue = text;
+  liveEl.scrollIntoView({ block: "end" });
+}
+
+function commitFinal(text) {
+  if (liveEl) { liveEl.classList.remove("live"); liveEl.lastChild.nodeValue = text; liveEl = null; }
+  else bubble("you", "You", text);
+  turnStart = performance.now();     // the clock the user actually experiences starts here
+}
+
+/** Schedule a PCM16 chunk to play gaplessly after whatever is already queued. */
+function playChunk(arrayBuffer) {
+  const pcm = new Int16Array(arrayBuffer);
+  const buf = audioCtx.createBuffer(1, pcm.length, PLAYBACK_RATE);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) ch[i] = pcm[i] / 32768;
+
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+
+  const now = audioCtx.currentTime;
+  if (playHead < now) playHead = now + 0.02;   // small cushion against underrun
+  if (turnStart !== null) {
+    // First audible sample of this turn. This is the honest end-to-end number: it is measured
+    // in the browser at the device clock, not on the server at enqueue time.
+    latEl.textContent = Math.round(performance.now() - turnStart + (playHead - now) * 1000);
+    turnStart = null;
+  }
+  src.start(playHead);
+  playHead += buf.duration;
+}
+
+async function start() {
+  $("start").disabled = true;
+  setState("connecting");
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+               channelCount: 1 }
+    });
+  } catch (e) {
+    bubble("coach", "Error", "Microphone permission denied. Allow it and press Start again.");
+    $("start").disabled = false; setState("idle"); return;
+  }
+
+  audioCtx = new AudioContext();
+  await audioCtx.resume();
+  playHead = audioCtx.currentTime;
+
+  micCtx = new AudioContext();
+  await micCtx.audioWorklet.addModule("/static/mic-worklet.js");
+  const source = micCtx.createMediaStreamSource(micStream);
+  worklet = new AudioWorkletNode(micCtx, "mic-processor");
+  source.connect(worklet);
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    $("stop").disabled = false;
+    worklet.port.onmessage = (e) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
+      const pcm = new Int16Array(e.data);
+      let peak = 0;
+      for (let i = 0; i < pcm.length; i += 16) peak = Math.max(peak, Math.abs(pcm[i]));
+      meterBar.style.width = Math.min(100, (peak / 8000) * 100) + "%";
+    };
+  };
+
+  ws.onmessage = (ev) => {
+    if (ev.data instanceof ArrayBuffer) { playChunk(ev.data); return; }
+    const m = JSON.parse(ev.data);
+    if (m.type === "partial") showPartial(m.text);
+    else if (m.type === "final") commitFinal(m.text);
+    else if (m.type === "assistant_text") bubble("coach", "Coach", m.text);
+    else if (m.type === "state") setState(m.state);
+    else if (m.type === "metrics") console.log("turn metrics", m.turn);
+    else if (m.type === "error") bubble("coach", "Error", m.message).classList.add("err");
+  };
+
+  ws.onclose = () => { setState("idle"); stop(); };
+  ws.onerror = () => bubble("coach", "Error", "Connection failed.");
+}
+
+function stop() {
+  $("start").disabled = false;
+  $("stop").disabled = true;
+  if (worklet) worklet.port.onmessage = null;
+  if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+  if (micStream) micStream.getTracks().forEach((t) => t.stop());
+  if (micCtx) micCtx.close();
+  meterBar.style.width = "0";
+  setState("idle");
+}
+
+$("start").onclick = start;
+$("stop").onclick = stop;
+</script>
+</body>
+</html>

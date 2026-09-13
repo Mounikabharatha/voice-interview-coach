@@ -22,3 +22,5 @@ Thumbs.db
 # demo output
 out.wav
 *.wav
+*.egg-info/
+.claude/
