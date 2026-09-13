@@ -30,6 +30,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..coachlogic import scoring
+from ..coachlogic.session import Session
 from ..config import Settings
 from ..llm.groq import GroqLLM
 from ..pipeline.endpoint import BargeInDetector, Endpointer
@@ -55,6 +57,10 @@ async def startup() -> None:
     app.state.stt = NvidiaSTT(settings.nvidia_api_key)
     app.state.tts = NvidiaTTS(settings.nvidia_api_key, sample_rate_hz=PLAYBACK_RATE_HZ)
     app.state.llm = GroqLLM(settings.groq_api_key)
+    # A SECOND client, for scoring only. The conversational one is capped at 160 tokens
+    # because spoken replies must be short — sharing it silently truncated every scoring
+    # response mid-JSON. Different jobs, different budgets.
+    app.state.scorer = GroqLLM(settings.groq_api_key, max_tokens=900, temperature=0.2)
     # Worth ~940 ms on the speech connection alone. Paid here so it is never paid in front
     # of a user — see coach/tts/nvidia.py.
     log.info("prewarming providers...")
@@ -98,7 +104,29 @@ async def ws(websocket: WebSocket) -> None:
 
     endpointer = Endpointer()
     barge_in = BargeInDetector()
+    session = Session()
+    all_scores: list[list[scoring.Score]] = []
+    score_tasks: list[asyncio.Task] = []
     responding = False
+
+    async def score_in_background(question: str, answer: str) -> None:
+        """Full rubric scoring, off the hot path — nobody is waiting on this."""
+        scores = await scoring.score_answer(app.state.scorer, question, answer)
+        if scores:
+            all_scores.append(scores)
+
+    async def send_report() -> None:
+        if score_tasks:
+            await asyncio.gather(*score_tasks, return_exceptions=True)
+        await send_event({
+            "type": "report",
+            "summary": scoring.summarise(all_scores),
+            "turns": [
+                {"question": t.question_text, "answer": t.answer, "was_probe": t.was_probe}
+                for t in session.transcript
+            ],
+            "detail": [[scoring.score_to_dict(s) for s in turn] for turn in all_scores],
+        })
 
     async def transcribe() -> None:
         """Stream transcripts out.
@@ -133,7 +161,21 @@ async def ws(websocket: WebSocket) -> None:
                 "verdict": decision.verdict, "waited_ms": round(decision.waited_ms),
             })
             await send_event({"type": "state", "state": "thinking"})
-            await controller.respond(decision.text)
+
+            question = session.current.text if session.current else ""
+            was_probe = session.state.value == "probing"
+            session.record(decision.text, was_probe=was_probe)
+            # Deep scoring runs in the background against the real rubric; the reply below
+            # is decided by a local heuristic so the candidate is not left waiting.
+            if question:
+                score_tasks.append(
+                    asyncio.create_task(score_in_background(question, decision.text))
+                )
+
+            kind, instruction = session.next_move(decision.text)
+            await controller.respond(decision.text, instruction)
+            if kind == "wrap":
+                await send_report()
         except asyncio.CancelledError:
             # Barge-in. Expected, not an error. TurnController's own finally block has
             # already closed the LLM stream and recorded what was said.
@@ -154,7 +196,9 @@ async def ws(websocket: WebSocket) -> None:
     turn_task: asyncio.Task | None = None
     try:
         await send_event({"type": "state", "state": "greeting"})
-        await controller.say(controller.opening_line())
+        await send_event({"type": "session_start",
+                          "questions": [q.text for q in session.questions]})
+        await controller.say(session.opening_line())
         await send_event({"type": "state", "state": "listening"})
         while True:
             message = await websocket.receive()
@@ -180,8 +224,9 @@ async def ws(websocket: WebSocket) -> None:
         pass
     finally:
         await audio_in.put(None)
-        for t in (task, turn_task):
+        for t in [task, turn_task, *score_tasks]:
             if t is not None:
                 t.cancel()
-        await asyncio.gather(*[t for t in (task, turn_task) if t], return_exceptions=True)
+        await asyncio.gather(*[t for t in [task, turn_task, *score_tasks] if t],
+                             return_exceptions=True)
         log.info("client disconnected")

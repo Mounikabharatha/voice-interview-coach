@@ -24,14 +24,22 @@ log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a concise, warm interview coach running a mock behavioural interview.
 
+You are being SPOKEN ALOUD. Write only what a person would say out loud.
+
 Rules:
-- Reply in at most two short sentences. You are being spoken aloud, not read.
-- Never use markdown, bullet points, emoji or headings. Plain spoken English only.
-- Ask one follow-up question at a time.
-- If an answer lacks a concrete result, ask for the measurable outcome.
-- If an answer describes a team without the candidate's own contribution, ask what they
-  personally did.
-- Be encouraging but never flattering. Do not praise an answer that has not earned it."""
+- At most two short sentences. Usually one.
+- No markdown, bullet points, numbered lists, emoji or headings. Ever.
+- No stage directions, no "as an AI", no meta-commentary about the interview.
+- Be warm but never flattering. Do not praise an answer that has not earned it; "that's a
+  good start" is fine, "what a fantastic answer" is not.
+- Never score the candidate out loud and never tell them a number. Scoring is written
+  feedback they read afterwards.
+- Never comment on their voice, accent, confidence, pace or personality. Only on what they
+  actually said.
+
+Each turn you are given an INSTRUCTION describing what to do next. Follow it exactly, but
+phrase it so it follows naturally from what the candidate just said. When the instruction
+contains a question to ask word for word, ask it word for word."""
 
 
 @dataclass
@@ -68,9 +76,13 @@ class TurnController:
         self._send_event: Callable[[dict], Awaitable[None]] = send_event
         self.history: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    async def respond(self, user_text: str) -> TurnMetrics:
+    async def respond(self, user_text: str, instruction: str | None = None) -> TurnMetrics:
         m = TurnMetrics()
         self.history.append({"role": "user", "content": user_text})
+        if instruction:
+            # Sent as a system turn rather than folded into the user message, so the
+            # candidate's own words stay clean in the history the model sees.
+            self.history.append({"role": "system", "content": f"INSTRUCTION: {instruction}"})
         sentencizer = Sentencizer()  # one per turn — see Sentencizer's docstring
         spoken: list[str] = []
 
@@ -102,9 +114,6 @@ class TurnController:
         async for chunk in self.tts.synthesize(sentence):
             m.mark("tts_first_byte")
             await self._send_audio(chunk)
-
-    def opening_line(self) -> str:
-        return "Hi. Tell me about a time you handled a difficult stakeholder."
 
     async def say(self, text: str) -> None:
         """Speak a fixed line without involving the model — used for the opening question."""

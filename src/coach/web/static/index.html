@@ -60,6 +60,27 @@
   #meter { width: 120px; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
   #meter i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .06s; }
   .hint { color: var(--muted); font-size: .8rem; }
+
+  /* feedback report */
+  #report { border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
+            padding: 1.25rem 1.4rem; margin-top: 1rem; }
+  #report h2 { font-size: 1rem; margin: 0 0 .2rem; }
+  #report .sub { color: var(--muted); font-size: .8rem; margin-bottom: 1rem; }
+  .comp { display: grid; grid-template-columns: 11rem 1fr auto; gap: .8rem;
+          align-items: center; padding: .55rem 0; border-top: 1px solid var(--line); }
+  .comp .nm { font-size: .85rem; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+  .bar i.low { background: var(--warn); }
+  .bar i.bad { background: #f87171; }
+  .score { font-family: var(--mono); font-size: .82rem; font-variant-numeric: tabular-nums;
+           color: var(--muted); }
+  .ev { margin-top: 1.1rem; border-top: 1px solid var(--line); padding-top: .9rem; }
+  .ev h3 { font-size: .7rem; text-transform: uppercase; letter-spacing: .1em;
+           color: var(--muted); margin: 0 0 .5rem; font-weight: 600; }
+  .ev p { margin: 0 0 .55rem; font-size: .85rem; color: var(--muted); }
+  .ev q { color: var(--ink); font-style: italic; }
+  .ev .unverified { color: var(--warn); font-family: var(--mono); font-size: .7rem; }
 </style>
 </head>
 <body>
@@ -222,6 +243,7 @@ async function start() {
       if (last) { const t = document.createElement("span");
         t.className = "verdict incomplete"; t.textContent = "interrupted"; last.appendChild(t); }
     }
+    else if (m.type === "report") renderReport(m);
     else if (m.type === "metrics") console.log("turn metrics", m.turn);
     else if (m.type === "error") bubble("coach", "Error", m.message).classList.add("err");
   };
@@ -239,6 +261,55 @@ function stop() {
   if (micCtx) micCtx.close();
   meterBar.style.width = "0";
   setState("idle");
+}
+
+const COMP_ORDER = ["situation", "ownership", "action", "result", "reflection"];
+
+function renderReport(m) {
+  const el = document.createElement("div");
+  el.id = "report";
+  const n = Object.values(m.summary).reduce((a, s) => a + s.n, 0);
+  el.innerHTML = `<h2>Your feedback</h2>
+    <div class="sub">Scored against five competencies across ${m.turns.length} answers.
+    Every score is a judgement about the answer, never about you.</div>`;
+
+  for (const key of COMP_ORDER) {
+    const s = m.summary[key];
+    if (!s) continue;
+    const pct = (s.mean / 5) * 100;
+    const cls = s.mean < 2.5 ? "bad" : s.mean < 3.5 ? "low" : "";
+    const row = document.createElement("div");
+    row.className = "comp";
+    row.innerHTML = `<span class="nm">${s.name}</span>
+      <span class="bar"><i class="${cls}" style="width:${pct}%"></i></span>
+      <span class="score">${s.mean.toFixed(1)} / 5</span>`;
+    el.appendChild(row);
+  }
+
+  // Show the evidence for the weakest competencies — a score with no quote is just a number.
+  const weakest = COMP_ORDER.filter((k) => m.summary[k])
+    .sort((a, b) => m.summary[a].mean - m.summary[b].mean).slice(0, 2);
+  const ev = document.createElement("div");
+  ev.className = "ev";
+  ev.innerHTML = "<h3>What to work on</h3>";
+  for (const key of weakest) {
+    for (const turn of m.detail) {
+      const sc = turn.find((x) => x.competency === key);
+      if (!sc) continue;
+      const p = document.createElement("p");
+      p.innerHTML = `<strong>${m.summary[key].name}</strong> — ${sc.rationale}`;
+      if (sc.evidence) {
+        p.innerHTML += ` <q>${sc.evidence}</q>`;
+      } else if (!sc.evidence_verified) {
+        p.innerHTML += ` <span class="unverified">no verbatim quote found</span>`;
+      }
+      ev.appendChild(p);
+      break;
+    }
+  }
+  el.appendChild(ev);
+  log.appendChild(el);
+  el.scrollIntoView({ block: "end" });
 }
 
 $("start").onclick = start;

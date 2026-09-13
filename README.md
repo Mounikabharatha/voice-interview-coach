@@ -139,6 +139,29 @@ audio whether a turn sounds finished, rather than inferring it from a transcript
 already thrown the evidence away. That is the next real improvement, and it would replace the
 word-count rule entirely.
 
+## Scoring, and why it is checked
+
+The coach scores each answer against five competencies — situation, ownership, action
+specificity, result, reflection — each anchored at levels 1, 3 and 5 so a score is a judgement
+against a written standard rather than a vibe.
+
+**Nothing scores the person.** There is no hireability, confidence or communication-style
+score. Those correlate with accent, gender and background far more than with competence, and
+they are where automated interview scoring has historically gone wrong. Every competency here
+is a property of the answer: does it name a result, does it say what the candidate personally
+did.
+
+**Every quote is checked against the transcript.** The model is told to quote the candidate
+verbatim. In a real session, **13 of 35 quotes actually appeared in what was said** — the rest
+were paraphrases. So quotes are verified by normalised token match, unverified ones are never
+shown, and a score of 4 or 5 resting on an unverified quote is capped to 3. Showing someone
+words they never said, attributed to them, is worse than showing no evidence.
+
+Two paths, deliberately. Deciding whether to ask a follow-up happens *now*, while the candidate
+sits in silence, so it uses a cheap local heuristic — counting numbers, "we" against "I",
+concrete verbs. Full rubric scoring runs in the background and lands in the report, where
+nobody is waiting.
+
 ## Design notes
 
 The architecture research behind these choices is in [`docs/research.md`](docs/research.md),

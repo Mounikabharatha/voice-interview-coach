@@ -24,3 +24,4 @@ out.wav
 *.wav
 *.egg-info/
 .claude/
+runs/*.jsonl
