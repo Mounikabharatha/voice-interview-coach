@@ -12,11 +12,10 @@ Wire protocol, v1:
     server -> client   JSON     {"type": "partial" | "final" | "assistant_text"
                                           | "state" | "metrics" | "error", ...}
 
-Turn detection for now is the speech recogniser's own endpointing: its `is_final` transcript
-*is* the end-of-turn signal. That is a deliberate shortcut — it is free, it is already
-measured at 286-569 ms, and it keeps this step to one moving part. Proper voice-activity
-detection and barge-in replace it in a later step, at which point the user will be able to
-interrupt mid-sentence, which they cannot do here.
+Turn detection belongs to `pipeline/endpoint.py`. Recogniser finals are treated as
+*fragments* of an answer, and the turn ends only after a run of silence whose required length
+depends on whether the text sounds finished. Barge-in — interrupting the coach mid-sentence —
+is not implemented here; endpointing is suspended while the coach speaks.
 """
 from __future__ import annotations
 
@@ -32,6 +31,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import Settings
 from ..llm.groq import GroqLLM
+from ..pipeline.endpoint import Endpointer
 from ..pipeline.turn import TurnController
 from ..stt.nvidia import NvidiaSTT
 from ..tts.nvidia import NvidiaTTS
@@ -41,6 +41,7 @@ log = logging.getLogger("coach")
 
 STATIC = Path(__file__).parent / "static"
 PLAYBACK_RATE_HZ = 44_100
+MIC_FRAME_MS = 100  # must match FRAME_MS in static/mic-worklet.js
 
 app = FastAPI(title="Voice Interview Coach")
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -94,21 +95,23 @@ async def ws(websocket: WebSocket) -> None:
         while (frame := await audio_in.get()) is not None:
             yield frame
 
+    endpointer = Endpointer()
+    responding = False
+
     async def transcribe() -> None:
-        """Stream transcripts out; a final transcript is the end of the user's turn."""
+        """Stream transcripts out.
+
+        A recogniser final is a *fragment*, not the end of the turn — step 8 shipped the
+        opposite and cut answers in half. Finals accumulate in the endpointer, which decides
+        from silence and phrasing when the candidate has actually stopped.
+        """
         try:
             async for tr in app.state.stt.stream(mic_frames()):
                 if not tr.text.strip():
                     continue
                 if tr.is_final:
-                    await send_event({"type": "final", "text": tr.text})
-                    await send_event({"type": "state", "state": "thinking"})
-                    try:
-                        await controller.respond(tr.text)
-                    except Exception as exc:
-                        log.exception("turn failed")
-                        await send_event({"type": "error", "message": str(exc)[:200]})
-                    await send_event({"type": "state", "state": "listening"})
+                    endpointer.add_final(tr.text)
+                    await send_event({"type": "fragment", "text": endpointer.pending_text})
                 else:
                     await send_event({"type": "partial", "text": tr.text})
         except asyncio.CancelledError:
@@ -118,7 +121,29 @@ async def ws(websocket: WebSocket) -> None:
             with contextlib.suppress(Exception):
                 await send_event({"type": "error", "message": str(exc)[:200]})
 
+    async def handle_turn(decision) -> None:
+        """Run one response. Kept off the receive loop so audio keeps flowing."""
+        nonlocal responding
+        responding = True
+        try:
+            await send_event({
+                "type": "final", "text": decision.text,
+                "verdict": decision.verdict, "waited_ms": round(decision.waited_ms),
+            })
+            await send_event({"type": "state", "state": "thinking"})
+            await controller.respond(decision.text)
+        except Exception as exc:
+            log.exception("turn failed")
+            with contextlib.suppress(Exception):
+                await send_event({"type": "error", "message": str(exc)[:200]})
+        finally:
+            responding = False
+            endpointer.reset()
+            with contextlib.suppress(Exception):
+                await send_event({"type": "state", "state": "listening"})
+
     task = asyncio.create_task(transcribe())
+    turn_task: asyncio.Task | None = None
     try:
         await send_event({"type": "state", "state": "greeting"})
         await controller.say(controller.opening_line())
@@ -127,12 +152,22 @@ async def ws(websocket: WebSocket) -> None:
             message = await websocket.receive()
             if message["type"] == "websocket.disconnect":
                 break
-            if (data := message.get("bytes")) is not None:
-                await audio_in.put(data)
+            if (data := message.get("bytes")) is None:
+                continue
+            await audio_in.put(data)
+            # Endpointing pauses while the coach is speaking. Without barge-in there is
+            # nothing useful to do with speech during playback, and the coach's own voice
+            # leaking through the mic would otherwise trigger a turn. Step 10 changes this.
+            if responding:
+                continue
+            if (decision := endpointer.feed_audio(data, MIC_FRAME_MS)) is not None:
+                turn_task = asyncio.create_task(handle_turn(decision))
     except WebSocketDisconnect:
         pass
     finally:
         await audio_in.put(None)
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        for t in (task, turn_task):
+            if t is not None:
+                t.cancel()
+        await asyncio.gather(*[t for t in (task, turn_task) if t], return_exceptions=True)
         log.info("client disconnected")

@@ -31,26 +31,35 @@ from coach.tts.nvidia import NvidiaTTS
 
 WS_URL = os.getenv("COACH_WS", "ws://127.0.0.1:8000/ws")
 FRAME_MS = 100
-DEFAULT_ANSWER = (
-    "I led the migration of our billing system to a new payments provider. "
-    "It took about four months and I coordinated three teams."
-)
+# Deliberately shaped like the answer that broke step 8: part one ends on "and", the
+# candidate pauses to think, then continues. A naive endpointer ends the turn in the gap.
+PART_ONE = "I led the migration of our billing system to a new payments provider, and"
+PART_TWO = "it took about four months with three teams involved."
+THINKING_PAUSE_S = 1.6
 
 
 async def main() -> int:
-    answer = " ".join(sys.argv[1:]) or DEFAULT_ANSWER
     key = os.getenv("NVIDIA_API_KEY")
     if not key:
         print("error: NVIDIA_API_KEY not set", file=sys.stderr)
         return 1
 
-    print(f"rendering the candidate's answer as speech:\n  {answer!r}\n")
+    print("candidate's answer, with a thinking pause in the middle:")
+    print(f"  part 1: {PART_ONE!r}")
+    print(f"  [pauses {THINKING_PAUSE_S}s to think]")
+    print(f"  part 2: {PART_TWO!r}\n")
+
     tts = NvidiaTTS(key, sample_rate_hz=MIC_RATE)
-    pcm = b"".join([c async for c in tts.synthesize(answer)])
-    secs = len(pcm) / (MIC_RATE * 2)
     frame_bytes = int(MIC_RATE * FRAME_MS / 1000) * 2
-    frames = [pcm[i:i + frame_bytes] for i in range(0, len(pcm), frame_bytes)]
-    print(f"{secs:.1f}s of audio, {len(frames)} frames\n")
+
+    async def render(text):
+        pcm = b"".join([c async for c in tts.synthesize(text)])
+        return [pcm[i:i + frame_bytes] for i in range(0, len(pcm), frame_bytes)]
+
+    frames_one, frames_two = await render(PART_ONE), await render(PART_TWO)
+    silence = [b"\x00\x00" * (frame_bytes // 2)] * int(THINKING_PAUSE_S * 1000 / FRAME_MS)
+    frames = frames_one + silence + frames_two
+    print(f"{len(frames)} frames total ({len(silence)} of them silence)\n")
 
     greeting_audio = 0
     reply_audio = 0
@@ -79,9 +88,12 @@ async def main() -> int:
                     print(f"  <- coach: {m['text']!r}")
                 elif t == "partial":
                     print(f"  <- partial: {m['text']!r}")
+                elif t == "fragment":
+                    print(f"  <- fragment accumulated: {m['text']!r}")
                 elif t == "final":
                     final_seen = True
-                    print(f"  <- FINAL:   {m['text']!r}")
+                    print(f"  <- TURN END [{m.get('verdict')}, waited {m.get('waited_ms')} ms]")
+                    print(f"     {m['text']!r}")
                 elif t == "state":
                     print(f"  <- state:   {m['state']}")
                 elif t == "metrics":
@@ -93,14 +105,21 @@ async def main() -> int:
         await asyncio.sleep(6)  # let the greeting finish so it is not transcribed as speech
 
         print(f"\nstreaming the answer in at real-time pace ({FRAME_MS} ms frames):")
-        for f in frames:
+        for i, f in enumerate(frames):
+            if i == len(frames_one):
+                print(f"  -> [thinking pause starts, {THINKING_PAUSE_S}s]")
+            if i == len(frames_one) + len(silence):
+                print("  -> [candidate continues]")
             await ws.send(f)
             await asyncio.sleep(FRAME_MS / 1000)
         speech_ended = time.perf_counter()
         print("  -> audio sent, speech ended\n")
 
-        # Keep the socket open so the model can answer.
-        await asyncio.sleep(25)
+        # Trailing silence so the endpointer can actually fire.
+        for _ in range(35):
+            await ws.send(b"\x00\x00" * (frame_bytes // 2))
+            await asyncio.sleep(FRAME_MS / 1000)
+        await asyncio.sleep(20)
         task.cancel()
 
     print("\n--- result ---")

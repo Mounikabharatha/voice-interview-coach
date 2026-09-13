@@ -43,6 +43,11 @@
   .who { display: block; font-size: .65rem; text-transform: uppercase; letter-spacing: .1em;
          color: var(--muted); margin-bottom: .25rem; }
   .err { color: #fca5a5; font-family: var(--mono); font-size: .8rem; }
+  .verdict { display: block; margin-top: .4rem; font-family: var(--mono); font-size: .65rem;
+             letter-spacing: .04em; opacity: .85; }
+  .verdict.complete   { color: var(--accent); }
+  .verdict.unclear    { color: var(--warn); }
+  .verdict.incomplete { color: #c4b5fd; }
 
   footer { padding: 1rem 1.25rem; border-top: 1px solid var(--line); flex: none;
            display: flex; justify-content: center; gap: 1rem; align-items: center; }
@@ -112,9 +117,18 @@ function showPartial(text) {
   liveEl.scrollIntoView({ block: "end" });
 }
 
-function commitFinal(text) {
-  if (liveEl) { liveEl.classList.remove("live"); liveEl.lastChild.nodeValue = text; liveEl = null; }
-  else bubble("you", "You", text);
+function commitFinal(text, verdict, waitedMs) {
+  if (liveEl) { liveEl.classList.remove("live"); liveEl.lastChild.nodeValue = text; }
+  else liveEl = bubble("you", "You", text);
+  if (verdict) {
+    // Show the endpointer's reasoning. It is the most interesting thing on screen: it says
+    // how long it waited before deciding you had finished, and what made it decide.
+    const tag = document.createElement("span");
+    tag.className = "verdict " + verdict;
+    tag.textContent = `${verdict} · waited ${waitedMs} ms`;
+    liveEl.appendChild(tag);
+  }
+  liveEl = null;
   turnStart = performance.now();     // the clock the user actually experiences starts here
 }
 
@@ -183,7 +197,8 @@ async function start() {
     if (ev.data instanceof ArrayBuffer) { playChunk(ev.data); return; }
     const m = JSON.parse(ev.data);
     if (m.type === "partial") showPartial(m.text);
-    else if (m.type === "final") commitFinal(m.text);
+    else if (m.type === "fragment") showPartial(m.text);
+    else if (m.type === "final") commitFinal(m.text, m.verdict, m.waited_ms);
     else if (m.type === "assistant_text") bubble("coach", "Coach", m.text);
     else if (m.type === "state") setState(m.state);
     else if (m.type === "metrics") console.log("turn metrics", m.turn);
