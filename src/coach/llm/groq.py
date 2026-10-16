@@ -26,7 +26,30 @@ import httpx
 log = logging.getLogger(__name__)
 
 GROQ_BASE = "https://api.groq.com/openai/v1"
-DEFAULT_MODEL = "qwen/qwen3.6-27b"
+
+# Preference order, best first. Resolved against the live model list at startup rather than
+# hardcoded, because free-tier catalogues change on a scale of weeks: `qwen/qwen3.6-27b` was
+# this project's first choice and measured first-speakable-token at 363 ms, and Groq retired it
+# roughly a month later. A pinned model id is a time bomb; this turns that into a logged
+# substitution the operator can see.
+#
+# The ranking is by whether reasoning can be switched off, which is the property that makes a
+# model usable for speech at all — see the module docstring.
+MODEL_PREFERENCE = (
+    "qwen/qwen3.8-27b",
+    "qwen/qwen3.6-27b",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+)
+
+# Classifiers, speech models and embedders live in the same list and reject `stream: true`.
+_NOT_CHAT = ("guard", "whisper", "tts", "embed", "orpheus")
+
+DEFAULT_MODEL = MODEL_PREFERENCE[0]
+
+
+class NoUsableModel(RuntimeError):
+    """Raised at startup when Groq offers nothing this project can talk to."""
 
 
 class GroqStream:
@@ -128,6 +151,52 @@ class GroqLLM:
             await ctx.__aexit__(None, None, None)
             raise RuntimeError(f"groq {response.status_code}: {detail}")
         return GroqStream(ctx, response)
+
+    async def available_models(self) -> list[str]:
+        r = await self._client.get("/models")
+        r.raise_for_status()
+        return sorted(m["id"] for m in r.json().get("data", []))
+
+    async def resolve_model(self) -> str:
+        """Pick a model that actually exists right now, and say so if it is not the first choice.
+
+        Called at startup. Keeps the configured model when it is still offered; otherwise falls
+        to the next item in MODEL_PREFERENCE, and failing that to any chat-capable model on the
+        account. The substitution is logged at WARNING because a silent model swap changes
+        measured latency and answer quality, and someone comparing today's numbers against the
+        README deserves to know which model produced them.
+        """
+        try:
+            available = await self.available_models()
+        except Exception as exc:
+            log.warning("could not list Groq models (%s); keeping %s", exc, self.model)
+            return self.model
+
+        if self.model in available:
+            return self.model
+
+        for candidate in MODEL_PREFERENCE:
+            if candidate in available:
+                log.warning(
+                    "Groq no longer offers %r — falling back to %r. Latency and wording may "
+                    "differ from the figures in the README.", self.model, candidate,
+                )
+                self.model = candidate
+                return candidate
+
+        usable = [m for m in available if not any(w in m.lower() for w in _NOT_CHAT)]
+        if usable:
+            log.warning(
+                "none of %s are available; falling back to %r, which is UNTESTED for this "
+                "project — check it can disable reasoning.", MODEL_PREFERENCE, usable[0],
+            )
+            self.model = usable[0]
+            return usable[0]
+
+        raise NoUsableModel(
+            f"Groq offers no chat-capable model on this account. Saw: {available}. "
+            "Run scripts/check_providers.py to see what is actually available."
+        )
 
     async def prewarm(self) -> None:
         """Open the TLS connection before the first real turn, as with the speech services."""

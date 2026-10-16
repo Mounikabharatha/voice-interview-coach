@@ -63,22 +63,30 @@ is from a datasheet.
 
 | Stage | Measured |
 |---|---|
-| Language model, first **speakable** token | **363 ms** |
-| Language model, first token of any kind | 88 ms — but it is chain-of-thought, so it cannot be spoken |
+| Language model, first **speakable** token | **162–221 ms** |
+| Language model, first token of any kind | 88 ms on the original model — but it is chain-of-thought, so it cannot be spoken |
 | Speech synthesis, first audio byte (warm) | 200–800 ms |
 | Speech synthesis, first audio byte (cold) | 1,141–2,384 ms |
 | Speech recognition, first partial | 875 ms |
 | Speech recognition, finalisation after speech stops | 286–569 ms |
 | Barge-in, speech to cancellation | **306 ms** |
-| End of speech to first reply audio | ~1.9–2.8 s |
+| End of speech to first reply audio | **~1.8 s** |
 
 Three of these changed the design.
 
-**Reasoning has to be switched off explicitly.** `qwen/qwen3.6-27b` returns its first token in
-88 ms — and that token is the model thinking out loud, which cannot be spoken. With
-`reasoning_effort="none"` the first *speakable* token takes 363 ms. The honest measure for a
-voice agent is the second number. A `reasoning_chars` counter asserts this stays at zero in
-production; it does.
+**Reasoning has to be switched off explicitly.** The original model returned its first token
+in 88 ms — and that token was the model thinking out loud, which cannot be spoken. With
+`reasoning_effort="none"` the first *speakable* token arrives in 162–221 ms. The honest measure
+for a voice agent is the second number. A `reasoning_chars` counter asserts this stays at zero
+in production; it does.
+
+**The model is resolved at startup, not pinned.** This project originally used
+`qwen/qwen3.6-27b` and measured it carefully. Groq retired it about a month later, which would
+have made the app fail on its first real turn. `GroqLLM.resolve_model()` now checks the live
+catalogue at startup, falls through a preference list, and logs a warning naming the
+substitution — because a silent model swap changes both latency and answer quality, and anyone
+comparing their numbers against this table deserves to know which model produced them. The
+replacement, `qwen/qwen3.8-27b`, is measurably faster than the model it replaced.
 
 **Prewarming the speech connection is worth about a second.** The TLS and HTTP/2 handshake is
 paid once, at startup, so it never lands on the first thing the coach says to a user.
@@ -179,7 +187,7 @@ decision is what makes the cross-platform promise true rather than aspirational.
 | Layer | Choice | Why |
 |---|---|---|
 | Speech to text | NVIDIA Nemotron ASR (Riva gRPC) | True streaming partials. Groq's Whisper is batch-only, which cannot support barge-in |
-| Language model | Groq `qwen/qwen3.6-27b` | The only free Groq model whose reasoning can be switched off |
+| Language model | Groq `qwen/qwen3.8-27b` | Reasoning can be switched off — see below. Resolved at startup, not pinned |
 | Speech synthesis | NVIDIA Magpie (Riva gRPC) | Streams audio in chunks and cancels mid-sentence |
 
 Each layer sits behind a small `Protocol` in `base.py`, so a provider can be swapped without

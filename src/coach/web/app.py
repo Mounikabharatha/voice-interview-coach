@@ -63,6 +63,13 @@ async def startup() -> None:
     app.state.scorer = GroqLLM(settings.groq_api_key, max_tokens=900, temperature=0.2)
     # Worth ~940 ms on the speech connection alone. Paid here so it is never paid in front
     # of a user — see coach/tts/nvidia.py.
+    # Resolve the model against the live catalogue BEFORE prewarming. Free-tier model ids
+    # are not stable — the project's original choice was retired about a month after it was
+    # measured — so a pinned id would fail on the first real turn instead of at startup.
+    model = await app.state.llm.resolve_model()
+    app.state.scorer.model = model
+    log.info("using Groq model: %s", model)
+
     log.info("prewarming providers...")
     await asyncio.gather(
         app.state.tts.prewarm(), app.state.stt.prewarm(), app.state.llm.prewarm()
