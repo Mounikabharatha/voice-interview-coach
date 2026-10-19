@@ -35,6 +35,14 @@ _NUMBERISH = re.compile(
 )
 _I_WORDS = re.compile(r"\b(i|my|me|myself)\b", re.I)
 _WE_WORDS = re.compile(r"\b(we|our|us|the team|they)\b", re.I)
+_REFLECTION = re.compile(
+    r"\b(learn|learns|learnt|learned|learning|lesson|lessons|takeaway|"
+    r"next time|differently|different(ly)? now|do over|"
+    r"realise|realised|realises|realize|realized|realizes|"
+    r"mistake|mistakes|wrong|should have|should've|would have|would've|"
+    r"in hindsight|hindsight|looking back|if I had|knew then)\b",
+    re.I,
+)
 _CONCRETE_VERBS = re.compile(
     r"\b(wrote|built|called|met|changed|moved|rewrote|escalated|proposed|refused|"
     r"scheduled|tested|measured|asked|told|drafted|negotiated|migrated|deployed|"
@@ -69,8 +77,11 @@ def quick_gaps(answer: str) -> list[str]:
     if len(words) < 45:
         gaps.append((3, "situation"))       # too short to have set any scene
 
-    if not re.search(r"\b(learn|learned|next time|differently|realised|realized|"
-                     r"mistake|wrong|should have|in hindsight)\b", answer, re.I):
+    # British and American spellings both, because the recogniser produces whichever it hears
+    # and this list is matched against its output, not against written English. A real session
+    # probed a candidate for reflection after they said "I learnt to test earlier" — "learnt"
+    # was missing, so a perfectly good reflection read as none at all.
+    if not _REFLECTION.search(answer):
         gaps.append((4, "reflection"))
 
     gaps.sort()
