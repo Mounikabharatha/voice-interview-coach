@@ -123,11 +123,20 @@ What survives is **length**. A behavioural answer is a story — situation, acti
 nobody tells one in twelve words, so a short grammatically complete sentence is far more likely
 to be an opening clause than a whole answer.
 
-| Pending text | Waits |
+| Pending text | Waits after the last word |
 |---|---|
-| Full-length, ends `.` `!` `?` | 900 ms |
-| Long, no terminal punctuation | 1,500 ms |
-| Ends on "and" / "the" / "um", **or under 20 words** | 2,500 ms |
+| Full-length, ends `.` `!` `?` | 1,300 ms |
+| Long, no terminal punctuation | 1,800 ms |
+| Ends on "and" / "the" / "um", **or under 20 words** | 2,600 ms |
+
+**The clock is the recogniser's, not a loudness meter's.** The first version measured microphone
+energy against an adaptive noise floor and ended a turn after enough quiet frames. On a real
+microphone it failed in both directions: in one room ordinary background noise read as speech
+forever and the turn never ended at all, and tuning the threshold only moved which room broke.
+The recogniser already contains a far better speech model than an energy threshold ever will —
+it emits text only when it hears words — so the signal is now *no new text for N milliseconds*,
+which is indifferent to fans, traffic and microphone gain. Energy is kept only to drive the
+on-screen level meter.
 
 **The cost is real.** Short replies like "Yes, that's right" wait the full 2.5 s. For an
 interview coach that is the right way round — being interrupted mid-answer is a much worse

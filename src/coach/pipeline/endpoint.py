@@ -43,9 +43,12 @@ from dataclasses import dataclass, field
 log = logging.getLogger(__name__)
 
 # Milliseconds of silence required to end a turn, by how finished the text sounds.
-SILENCE_COMPLETE_MS = 900
-SILENCE_UNCLEAR_MS = 1500
-SILENCE_INCOMPLETE_MS = 2500
+# Milliseconds with NO NEW WORDS from the recogniser before a turn ends. The recogniser's own
+# finalisation lag (300-500 ms) is inside these, not added to them, so wall-clock from the
+# candidate falling silent is roughly these numbers minus that lag.
+SILENCE_COMPLETE_MS = 1300
+SILENCE_UNCLEAR_MS = 1800
+SILENCE_INCOMPLETE_MS = 2600
 
 # Below this many words, a grammatically complete sentence is treated as the opening clause of
 # an answer rather than the whole thing. Tuned for behavioural interview answers, which run
@@ -159,9 +162,7 @@ class Endpointer:
     min_speech_ms: float = 300.0      # ignore coughs and door slams
 
     _pending: list[str] = field(default_factory=list)
-    _silence_started: float | None = None
-    _speech_ms: float = 0.0
-    _speaking: bool = False
+    _last_text: float | None = None
 
     def add_final(self, text: str) -> None:
         """A recogniser final is a fragment of the turn, not the end of it.
@@ -174,46 +175,47 @@ class Endpointer:
         """
         if text.strip():
             self._pending.append(text.strip())
+            self.note_activity()
 
     @property
     def pending_text(self) -> str:
         return " ".join(self._pending).strip()
 
+    def note_activity(self) -> None:
+        """Call for EVERY transcript, partial or final — this is the clock that matters."""
+        self._last_text = time.monotonic()
+
     def feed_audio(self, frame: bytes, frame_ms: float) -> TurnDecision | None:
-        """Returns a decision when the turn is complete, otherwise None."""
-        rms = frame_rms(frame)
+        """Returns a decision when the turn is complete, otherwise None.
 
-        # Track the noise floor only while nobody is speaking, so a loud answer does not
-        # drag the threshold up and deafen the detector.
-        is_speech = rms > self.noise_floor * self.speech_factor
-        if not is_speech:
-            self.noise_floor = 0.98 * self.noise_floor + 0.02 * rms
+        **The signal is silence from the recogniser, not silence from a loudness threshold.**
 
-        now = time.monotonic()
-        if is_speech:
-            self._speaking = True
-            self._speech_ms += frame_ms
-            self._silence_started = None
-            return None
+        The first version measured RMS energy against an adaptive noise floor and ended a turn
+        after enough quiet frames. On a real microphone that failed in both directions: in one
+        room the floor sat low enough that ordinary background noise read as speech forever and
+        the turn never ended at all; in another, speech read as silence.
 
-        if not self._speaking and not self._pending:
-            return None  # never spoke; nothing to end
+        The recogniser already contains a far better speech model than an energy threshold ever
+        will. It emits text only when it hears words, so "no new text for N milliseconds" means
+        the person stopped talking — regardless of fans, traffic, room tone, or microphone gain.
+        That is the signal used now. Energy is kept only to populate the UI meter.
 
-        if self._silence_started is None:
-            self._silence_started = now
-            return None
+        The cost is the recogniser's own finalisation delay, roughly 300-500 ms, which is now
+        inside the wait rather than added after it. The thresholds below are set accordingly.
+        """
+        self.noise_floor = 0.98 * self.noise_floor + 0.02 * frame_rms(frame)  # meter only
 
-        silent_ms = (now - self._silence_started) * 1000
         text = self.pending_text
-        if not text or self._speech_ms < self.min_speech_ms:
+        if not text or self._last_text is None:
             return None
 
+        quiet_ms = (time.monotonic() - self._last_text) * 1000
         needed = required_silence_ms(text)
-        if silent_ms >= needed:
-            decision = TurnDecision(text, silent_ms, looks_complete(text))
+        if quiet_ms >= needed:
+            decision = TurnDecision(text, quiet_ms, looks_complete(text))
             log.info(
-                "turn end: %s after %.0f ms silence (needed %d) — %r",
-                decision.verdict, silent_ms, needed, text[:60],
+                "turn end: %s after %.0f ms with no new words (needed %d) — %r",
+                decision.verdict, quiet_ms, needed, text[:60],
             )
             self.reset()
             return decision
@@ -221,9 +223,7 @@ class Endpointer:
 
     def reset(self) -> None:
         self._pending.clear()
-        self._silence_started = None
-        self._speech_ms = 0.0
-        self._speaking = False
+        self._last_text = None
 
 
 @dataclass

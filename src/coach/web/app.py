@@ -176,6 +176,10 @@ async def ws(websocket: WebSocket) -> None:
             async for tr in app.state.stt.stream(mic_frames()):
                 if not tr.text.strip():
                     continue
+                # Every transcript resets the stall clock, partials included. A partial is
+                # proof the recogniser is still hearing words, which is exactly what the
+                # endpointer needs to know.
+                endpointer.note_activity()
                 if tr.is_final:
                     endpointer.add_final(tr.text)
                     await send_event({"type": "fragment", "text": endpointer.pending_text})

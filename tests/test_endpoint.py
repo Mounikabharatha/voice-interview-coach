@@ -52,6 +52,29 @@ CASES = [
 ]
 
 
+def quiet_frame():
+    return b"\x00\x00" * 1600
+
+
+def _still_open_while_speaking(ep):
+    """New words keep arriving: the turn must stay open however long that goes on."""
+    t = [1000.0]
+    real = ep.time.monotonic
+    ep.time.monotonic = lambda: t[0]
+    try:
+        e = ep.Endpointer()
+        e.add_final("I led the migration and it took four months with three teams involved "
+                    "and we cut failed payments by twelve percent in the first quarter.")
+        for _ in range(60):
+            t[0] += 0.1
+            e.note_activity()                      # recogniser is still producing words
+            if e.feed_audio(quiet_frame(), 100.0) is not None:
+                return False
+        return True
+    finally:
+        ep.time.monotonic = real
+
+
 def main() -> int:
     failures = 0
 
@@ -76,6 +99,45 @@ def main() -> int:
         ("odd-length frame handled", frame_rms(b"\x00\x40\x00") > 0),
     ]
     for name, ok in checks:
+        failures += not ok
+        print(f"  [{'ok  ' if ok else 'FAIL'}] {name}")
+
+    print("\nendpointer — ends a turn on recogniser silence, not loudness:")
+    import struct, random
+    from coach.pipeline import endpoint as ep
+
+    rnd = random.Random(7)
+    ROOM = struct.pack("<1600h", *[rnd.randint(-700, 700) for _ in range(1600)])
+    LOUD = struct.pack("<1600h", *([8000] * 1600))
+
+    def run_endpointer(frames_after_text, frame_audio, clock_step_ms=100.0):
+        """Drive an Endpointer with a fake clock so no test has to sleep."""
+        t = [1000.0]
+        real = ep.time.monotonic
+        ep.time.monotonic = lambda: t[0]
+        try:
+            e = ep.Endpointer()
+            e.add_final("I led the migration of our billing system to a new payments provider, "
+                        "and it took four months with three teams and we cut failures by twelve percent.")
+            out = None
+            for _ in range(frames_after_text):
+                t[0] += clock_step_ms / 1000.0
+                out = e.feed_audio(frame_audio, clock_step_ms)
+                if out:
+                    return out
+            return out
+        finally:
+            ep.time.monotonic = real
+
+    # The regression: constant room noise must NOT keep a turn open forever. The old
+    # energy-threshold version never ended the turn at all under this input.
+    echecks = [
+        ("ends under constant ROOM NOISE (the bug)", run_endpointer(40, ROOM) is not None),
+        ("ends under digital silence too", run_endpointer(40, quiet_frame()) is not None),
+        ("does NOT end while words keep arriving", _still_open_while_speaking(ep)),
+        ("ends under loud input once words stop", run_endpointer(40, LOUD) is not None),
+    ]
+    for name, ok in echecks:
         failures += not ok
         print(f"  [{'ok  ' if ok else 'FAIL'}] {name}")
 
@@ -114,7 +176,7 @@ def main() -> int:
         failures += not ok
         print(f"  [{'ok  ' if ok else 'FAIL'}] {name}")
 
-    total = len(CASES) + len(checks) + len(bchecks)
+    total = len(CASES) + len(checks) + len(bchecks) + len(echecks)
     print(f"\n{total - failures}/{total} passed")
     return 1 if failures else 0
 
