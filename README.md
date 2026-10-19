@@ -69,7 +69,7 @@ is from a datasheet.
 | Speech synthesis, first audio byte (cold) | 1,141–2,384 ms |
 | Speech recognition, first partial | 875 ms |
 | Speech recognition, finalisation after speech stops | 286–569 ms |
-| Barge-in, speech to cancellation | **306 ms** |
+| Barge-in, speech to cancellation (headphones, opt-in) | **306 ms** |
 | End of speech to first reply audio | **~1.8 s** |
 
 Three of these changed the design.
@@ -232,8 +232,11 @@ pause that used to split one answer into two turns.
 
 - **Turn detection is heuristic**, not learned. See the section above for what it costs and
   what would replace it.
-- **Echo.** Browser echo cancellation does most of the work, but without headphones the coach's
-  own voice can occasionally trigger barge-in.
+- **Barge-in needs headphones, and is off by default.** Without them the coach's own voice
+  returns through the microphone and cancels every reply — browser echo cancellation alone does
+  not prevent it. There is a checkbox in the UI. This was found by testing on a real microphone
+  after it had passed every automated test, because the tests fed digital silence and a real
+  room never does.
 - **Free-tier limits.** Groq allows 1,000 requests/day. A session uses roughly 10–20.
 - **English only.** The recogniser and rubric assume English.
 - **Interrupted replies** are recorded as spoken up to the sentence boundary, not to the exact

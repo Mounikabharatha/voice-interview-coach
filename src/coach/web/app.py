@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 from pathlib import Path
 from typing import AsyncIterator
@@ -116,7 +117,10 @@ async def ws(websocket: WebSocket) -> None:
         async with send_lock:
             await websocket.send_json(payload)
 
+    speaking = {"audio_started": False}
+
     async def send_audio(pcm: bytes) -> None:
+        speaking["audio_started"] = True
         async with send_lock:
             await websocket.send_bytes(pcm)
 
@@ -131,6 +135,11 @@ async def ws(websocket: WebSocket) -> None:
     endpointer = Endpointer()
     barge_in = BargeInDetector()
     session = Session()
+    # Barge-in is OFF by default. Without headphones the coach's own voice returns through
+    # the microphone and cancels every reply — browser echo cancellation is not sufficient
+    # on its own. A feature that silently breaks the app for most people is worse than a
+    # feature behind a switch, so the client opts in and the UI says what it needs.
+    barge_in_enabled = False
     # Set when a reply was cut off before anything was audible, so it can be re-issued.
     pending_instruction: dict[str, str | None] = {"text": None}
     all_scores: list[list[scoring.Score]] = []
@@ -247,11 +256,23 @@ async def ws(websocket: WebSocket) -> None:
             message = await websocket.receive()
             if message["type"] == "websocket.disconnect":
                 break
+            if (text := message.get("text")) is not None:
+                with contextlib.suppress(Exception):
+                    cfg = json.loads(text)
+                    if cfg.get("type") == "config":
+                        barge_in_enabled = bool(cfg.get("barge_in"))
+                        log.info("barge-in %s by client",
+                                 "enabled" if barge_in_enabled else "disabled")
+                continue
             if (data := message.get("bytes")) is None:
                 continue
             await audio_in.put(data)
             if responding:
-                # The coach is talking. Watch for the user talking over it.
+                # Only once real audio is going out. Arming at turn-end meant the whole
+                # think-and-synthesize pause counted as a window in which room noise could
+                # cancel a reply that had not started yet.
+                if not barge_in_enabled or not speaking["audio_started"]:
+                    continue
                 if barge_in.feed(data, MIC_FRAME_MS) and turn_task and not turn_task.done():
                     log.info("barge-in")
                     turn_task.cancel()
@@ -264,6 +285,7 @@ async def ws(websocket: WebSocket) -> None:
                 # Hand barge-in the noise floor the endpointer has learned from this room,
                 # plus a grace period. A fixed floor fired on room tone and cancelled every
                 # reply before a word of it was audible.
+                speaking["audio_started"] = False
                 barge_in.arm(endpointer.noise_floor)
                 turn_task = asyncio.create_task(handle_turn(decision))
     except WebSocketDisconnect:

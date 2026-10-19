@@ -60,6 +60,9 @@
   #meter { width: 120px; height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
   #meter i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .06s; }
   .hint { color: var(--muted); font-size: .8rem; }
+  .toggle { display: flex; align-items: center; gap: .45rem; cursor: pointer; user-select: none; }
+  .toggle input { accent-color: var(--accent); cursor: pointer; margin: 0; }
+  .warn-note { color: var(--warn); font-size: .72rem; }
 
   /* feedback report */
   #report { border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
@@ -103,7 +106,8 @@
   <button id="start">Start</button>
   <button id="stop" class="stop" disabled>Stop</button>
   <div id="meter"><i></i></div>
-  <span class="hint" id="hint">headphones recommended — you can interrupt mid-sentence</span>
+  <label class="hint toggle"><input type="checkbox" id="bargein"> Allow interrupting
+    <span class="warn-note">(needs headphones)</span></label>
 </footer>
 
 <script>
@@ -220,6 +224,7 @@ async function start() {
 
   ws.onopen = () => {
     $("stop").disabled = false;
+    sendConfig();
     worklet.port.onmessage = (e) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
       const pcm = new Int16Array(e.data);
@@ -251,6 +256,19 @@ async function start() {
   ws.onclose = () => { setState("idle"); stop(); };
   ws.onerror = () => bubble("coach", "Error", "Connection failed.");
 }
+
+/** Tell the server whether to watch for interruptions.
+ *
+ * Off by default. Without headphones the coach's own voice comes back through the microphone
+ * and cancels every reply — browser echo cancellation alone does not stop it. Better to have
+ * the feature behind a switch than to have the app appear broken for anyone using speakers.
+ */
+function sendConfig() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: "config", barge_in: $("bargein").checked }));
+  }
+}
+$("bargein").onchange = sendConfig;
 
 function stop() {
   $("start").disabled = false;
