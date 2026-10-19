@@ -42,6 +42,25 @@ from ..tts.nvidia import NvidiaTTS
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("coach")
 
+
+def friendly_error(exc: Exception) -> str:
+    """Turn a provider exception into something a user can act on.
+
+    A raw gRPC rendezvous dump on screen tells the person nothing and makes a working app look
+    broken. The full exception still goes to the server log for whoever is debugging.
+    """
+    text = str(exc)
+    if "Address lookup failed" in text or "StatusCode.UNAVAILABLE" in text:
+        return ("Could not reach NVIDIA's speech service. Check your internet connection, "
+                "then press Start again.")
+    if "StatusCode.UNAUTHENTICATED" in text or "401" in text:
+        return "NVIDIA rejected the API key. Check NVIDIA_API_KEY in your .env file."
+    if "429" in text or "rate limit" in text.lower():
+        return "Hit a free-tier rate limit. Wait a minute and press Start again."
+    if "groq" in text.lower():
+        return "The language model service returned an error. Check GROQ_API_KEY in .env."
+    return "Something went wrong. The full error is in the terminal where you ran the server."
+
 STATIC = Path(__file__).parent / "static"
 PLAYBACK_RATE_HZ = 44_100
 MIC_FRAME_MS = 100  # must match FRAME_MS in static/mic-worklet.js
@@ -112,6 +131,8 @@ async def ws(websocket: WebSocket) -> None:
     endpointer = Endpointer()
     barge_in = BargeInDetector()
     session = Session()
+    # Set when a reply was cut off before anything was audible, so it can be re-issued.
+    pending_instruction: dict[str, str | None] = {"text": None}
     all_scores: list[list[scoring.Score]] = []
     score_tasks: list[asyncio.Task] = []
     responding = False
@@ -156,7 +177,7 @@ async def ws(websocket: WebSocket) -> None:
         except Exception as exc:
             log.exception("transcription stream failed")
             with contextlib.suppress(Exception):
-                await send_event({"type": "error", "message": str(exc)[:200]})
+                await send_event({"type": "error", "message": friendly_error(exc)})
 
     async def handle_turn(decision) -> None:
         """Run one response. Kept off the receive loop so audio keeps flowing."""
@@ -179,8 +200,23 @@ async def ws(websocket: WebSocket) -> None:
                     asyncio.create_task(score_in_background(question, decision.text))
                 )
 
-            kind, instruction = session.next_move(decision.text)
-            await controller.respond(decision.text, instruction)
+            if pending_instruction["text"]:
+                kind, instruction = "question", pending_instruction["text"]
+                pending_instruction["text"] = None
+                log.info("re-issuing the instruction the interrupted turn never delivered")
+            else:
+                kind, instruction = session.next_move(decision.text)
+            spoken_any = False
+            try:
+                metrics = await controller.respond(decision.text, instruction)
+                spoken_any = metrics.first_sentence is not None
+            finally:
+                if not spoken_any:
+                    # Interrupted (or failed) before a single word was audible. The session
+                    # has already advanced past this question, so without this the candidate
+                    # is simply never asked it.
+                    pending_instruction["text"] = instruction
+                    log.info("turn produced no audio; will re-issue: %s", instruction[:60])
             if kind == "wrap":
                 await send_report()
         except asyncio.CancelledError:
@@ -191,7 +227,7 @@ async def ws(websocket: WebSocket) -> None:
         except Exception as exc:
             log.exception("turn failed")
             with contextlib.suppress(Exception):
-                await send_event({"type": "error", "message": str(exc)[:200]})
+                await send_event({"type": "error", "message": friendly_error(exc)})
         finally:
             responding = False
             endpointer.reset()
@@ -225,7 +261,10 @@ async def ws(websocket: WebSocket) -> None:
                     endpointer.reset()
                 continue
             if (decision := endpointer.feed_audio(data, MIC_FRAME_MS)) is not None:
-                barge_in.reset()
+                # Hand barge-in the noise floor the endpointer has learned from this room,
+                # plus a grace period. A fixed floor fired on room tone and cancelled every
+                # reply before a word of it was audible.
+                barge_in.arm(endpointer.noise_floor)
                 turn_task = asyncio.create_task(handle_turn(decision))
     except WebSocketDisconnect:
         pass

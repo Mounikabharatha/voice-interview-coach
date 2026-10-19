@@ -80,20 +80,35 @@ def main() -> int:
         print(f"  [{'ok  ' if ok else 'FAIL'}] {name}")
 
     print("\nbarge-in detector:")
-    loud = b"\x00\x40" * 1600   # well above the floor
-    quiet = b"\x00\x00" * 1600
-    d = BargeInDetector()
-    fired_on_quiet = any(d.feed(quiet, 100) for _ in range(20))
-    d.reset()
-    # must need SUSTAINED speech, not one frame — otherwise a cough cancels the coach
-    one_frame = d.feed(loud, 100)
-    d.reset()
-    sustained = [d.feed(loud, 100) for _ in range(5)]
+    import struct
+    loud = struct.pack("<1600h", *([8000] * 1600))    # someone talking
+    quiet = b"\x00\x00" * 1600                        # digital silence
+    # Real microphones never produce digital silence. This is room tone at a level that a
+    # real mic with automatic gain control routinely reports — and it is ABOVE the fixed
+    # threshold the first version used, which is why barge-in fired on an empty room and
+    # cancelled every reply. This case is the regression test for that bug.
+    room_tone = struct.pack("<1600h", *([700] * 1600))
+
+    def run(frames, floor=120.0):
+        d = BargeInDetector()
+        d.arm(floor)
+        return [d.feed(f, 100) for f in frames]
+
+    # grace_ms=400 at 100 ms a frame means the first four frames can never fire
+    grace_frames = 4
     bchecks = [
-        ("silence never triggers", not fired_on_quiet),
-        ("a single frame does not trigger", not one_frame),
-        ("sustained speech does trigger", any(sustained)),
-        ("fires once, then rearms", sum(sustained) == 1),
+        ("digital silence never triggers", not any(run([quiet] * 20))),
+        ("ROOM TONE never triggers (the bug)", not any(run([room_tone] * 20, floor=700))),
+        ("room tone IS above the old fixed threshold",
+         700 > 120 * 4),
+        ("a single loud frame does not trigger",
+         not any(run([quiet] * grace_frames + [loud]))),
+        ("sustained speech does trigger",
+         any(run([quiet] * grace_frames + [loud] * 5))),
+        ("nothing fires during the grace period",
+         not any(run([loud] * grace_frames))),
+        ("fires once per arm, then rearms",
+         sum(run([quiet] * grace_frames + [loud] * 5)) == 1),
     ]
     for name, ok in bchecks:
         failures += not ok

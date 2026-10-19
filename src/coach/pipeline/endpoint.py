@@ -244,17 +244,43 @@ class BargeInDetector:
        reply. This is the main reason the threshold is not simply "any frame above the floor".
 
     Headphones remove the problem entirely, which is why the UI recommends them.
+
+    **The noise floor must be learned, not assumed.** An earlier version hardcoded it at 120,
+    which survived every test because the tests fed digitally silent frames (RMS exactly 0).
+    On a real microphone with automatic gain control, room tone alone sits well above that, so
+    barge-in fired on the first frame the coach spoke and cancelled every reply instantly. The
+    floor is now taken from `Endpointer`, which already adapts to the room, with an absolute
+    minimum so a very quiet room cannot drive the threshold down to nothing.
     """
 
-    noise_floor: float = 120.0
     speech_factor: float = 4.0      # stricter than Endpointer: residual echo is quiet
     min_speech_ms: float = 240.0    # sustained, not a click
+    grace_ms: float = 400.0         # see `arm()`
+    min_floor: float = 60.0         # a silent room must not make the threshold ~0
 
     _speech_ms: float = 0.0
+    _floor: float = 120.0
+    _since_armed_ms: float = 0.0
+
+    def arm(self, noise_floor: float) -> None:
+        """Called when the coach starts speaking.
+
+        The grace period matters for two reasons. The browser's echo canceller needs a moment
+        to converge on a signal it has not heard before, so the first few hundred milliseconds
+        of playback are the most likely to leak. And a barge-in in the first instant cancels a
+        reply before a single word of it is audible, which reads as the app being broken rather
+        than as responsive.
+        """
+        self._speech_ms = 0.0
+        self._since_armed_ms = 0.0
+        self._floor = max(noise_floor, self.min_floor)
 
     def feed(self, frame: bytes, frame_ms: float) -> bool:
         """True the moment sustained speech is confirmed. Call only while the coach speaks."""
-        if frame_rms(frame) > self.noise_floor * self.speech_factor:
+        self._since_armed_ms += frame_ms
+        if self._since_armed_ms < self.grace_ms:
+            return False
+        if frame_rms(frame) > self._floor * self.speech_factor:
             self._speech_ms += frame_ms
             if self._speech_ms >= self.min_speech_ms:
                 self._speech_ms = 0.0
@@ -267,3 +293,4 @@ class BargeInDetector:
 
     def reset(self) -> None:
         self._speech_ms = 0.0
+        self._since_armed_ms = 0.0
