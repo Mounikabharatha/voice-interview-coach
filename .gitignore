@@ -25,3 +25,6 @@ out.wav
 *.egg-info/
 .claude/
 runs/*.jsonl
+
+# personal demo prep, not part of the project
+demo-answers.md
