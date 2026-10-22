@@ -111,7 +111,7 @@
 </footer>
 
 <script>
-const PLAYBACK_RATE = 44100;
+let PLAYBACK_RATE = 22050;   // server confirms via /healthz
 const $ = (id) => document.getElementById(id);
 const log = $("log"), dot = $("dot"), statusEl = $("status"), latEl = $("lat");
 const meterBar = document.querySelector("#meter i");
@@ -198,6 +198,12 @@ function cancelAudio() {
 async function start() {
   $("start").disabled = true;
   setState("connecting");
+  // Audio rate is server-side policy: the hosted build halves it to stay inside the free
+  // tier's bandwidth allowance. Ask rather than assume, or playback runs at the wrong speed.
+  try {
+    const h = await (await fetch("/healthz")).json();
+    if (h.playback_rate_hz) PLAYBACK_RATE = h.playback_rate_hz;
+  } catch (e) { /* keep the default */ }
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true,
@@ -248,6 +254,7 @@ async function start() {
       if (last) { const t = document.createElement("span");
         t.className = "verdict incomplete"; t.textContent = "interrupted"; last.appendChild(t); }
     }
+    else if (m.type === "refused") { bubble("coach", "Demo limit", m.message); stop(); }
     else if (m.type === "report") renderReport(m);
     else if (m.type === "metrics") console.log("turn metrics", m.turn);
     else if (m.type === "error") bubble("coach", "Error", m.message).classList.add("err");

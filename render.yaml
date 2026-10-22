@@ -1,0 +1,41 @@
+# Render blueprint. Deploy with: New > Blueprint, point it at this repo.
+#
+# The free plan is chosen deliberately and it has two limits that shape the app:
+#
+#   - 5 GB/month outbound. Exceed it with no payment method on file and Render suspends the
+#     service until the 1st of the next month. That is why COACH_PLAYBACK_HZ halves the audio
+#     rate, and why src/coach/web/limits.py caps sessions.
+#   - Free services sleep after inactivity, so the first visitor after a quiet spell waits
+#     roughly a minute for the container to wake. There is no way around that without paying;
+#     the README says so rather than letting a recruiter think the app is broken.
+#
+# WebSockets do work on free instances, and a service stays awake while receiving WebSocket
+# messages — so a session in progress will not be cut off mid-sentence.
+services:
+  - type: web
+    name: voice-interview-coach
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m coach
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      # Secrets are never committed. `sync: false` makes Render prompt for them once, in its
+      # dashboard, and keeps them out of this file and out of git.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: NVIDIA_API_KEY
+        sync: false
+      # Spend limits — see src/coach/web/limits.py. Tune these in the Render dashboard
+      # without redeploying.
+      - key: COACH_DAILY_SESSIONS
+        value: "40"
+      - key: COACH_MAX_CONCURRENT
+        value: "2"
+      - key: COACH_MAX_SESSION_SECONDS
+        value: "420"
+      - key: COACH_PLAYBACK_HZ
+        value: "22050"

@@ -31,6 +31,9 @@ class Settings:
         return cls(
             groq_api_key=os.environ["GROQ_API_KEY"],
             nvidia_api_key=os.environ["NVIDIA_API_KEY"],
-            host=os.getenv("COACH_HOST", "127.0.0.1"),
-            port=int(os.getenv("COACH_PORT", "8000")),
+            # Hosting platforms inject PORT and expect the process to bind 0.0.0.0.
+            # Locally neither is set, so it stays on localhost — which also keeps the
+            # microphone permission working, since browsers only trust localhost or HTTPS.
+            host=os.getenv("COACH_HOST", "0.0.0.0" if os.getenv("PORT") else "127.0.0.1"),
+            port=int(os.getenv("PORT") or os.getenv("COACH_PORT") or 8000),
         )

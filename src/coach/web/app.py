@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -38,6 +39,7 @@ from ..llm.groq import GroqLLM
 from ..pipeline.endpoint import BargeInDetector, Endpointer
 from ..pipeline.turn import TurnController
 from ..stt.nvidia import NvidiaSTT
+from .limits import Limits
 from ..tts.nvidia import NvidiaTTS
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -63,7 +65,11 @@ def friendly_error(exc: Exception) -> str:
     return "Something went wrong. The full error is in the terminal where you ran the server."
 
 STATIC = Path(__file__).parent / "static"
-PLAYBACK_RATE_HZ = 44_100
+# 22.05 kHz halves outbound bandwidth against 44.1 kHz and is indistinguishable for speech.
+# Render's free workspace allows 5 GB/month outbound and then suspends the service until the
+# 1st of the next month — a dead link on a CV — so the hosted build does not spend bandwidth
+# it does not need. Override with COACH_PLAYBACK_HZ.
+PLAYBACK_RATE_HZ = int(os.getenv("COACH_PLAYBACK_HZ", "22050"))
 MIC_FRAME_MS = 100  # must match FRAME_MS in static/mic-worklet.js
 
 app = FastAPI(title="Voice Interview Coach")
@@ -94,6 +100,8 @@ async def startup() -> None:
     await asyncio.gather(
         app.state.tts.prewarm(), app.state.stt.prewarm(), app.state.llm.prewarm()
     )
+    app.state.limits = Limits()
+    log.info("limits: %s", app.state.limits.snapshot())
     log.info("ready on http://%s:%d", settings.host, settings.port)
 
 
@@ -104,12 +112,22 @@ async def index() -> FileResponse:
 
 @app.get("/healthz")
 async def healthz() -> dict:
-    return {"ok": True, "playback_rate_hz": PLAYBACK_RATE_HZ}
+    return {"ok": True, "playback_rate_hz": PLAYBACK_RATE_HZ,
+            "limits": app.state.limits.snapshot()}
 
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
     await websocket.accept()
+
+    allowed, refusal = app.state.limits.try_acquire()
+    if not allowed:
+        log.info("session refused: %s", refusal)
+        with contextlib.suppress(Exception):
+            await websocket.send_json({"type": "refused", "message": refusal})
+            await websocket.close()
+        return
+    session_deadline = asyncio.get_running_loop().time() + app.state.limits.max_session_seconds
     audio_in: asyncio.Queue[bytes | None] = asyncio.Queue()
     send_lock = asyncio.Lock()
 
@@ -270,6 +288,13 @@ async def ws(websocket: WebSocket) -> None:
                 continue
             if (data := message.get("bytes")) is None:
                 continue
+            if asyncio.get_running_loop().time() > session_deadline:
+                log.info("session hit the time limit")
+                with contextlib.suppress(Exception):
+                    await send_event({"type": "refused", "message":
+                        "That's the end of this demo session — it is capped to keep the free "
+                        "tier available for others. Press Start to begin a new one."})
+                break
             await audio_in.put(data)
             if responding:
                 # Only once real audio is going out. Arming at turn-end meant the whole
@@ -301,4 +326,5 @@ async def ws(websocket: WebSocket) -> None:
                 t.cancel()
         await asyncio.gather(*[t for t in [task, turn_task, *score_tasks] if t],
                              return_exceptions=True)
-        log.info("client disconnected")
+        app.state.limits.release()
+        log.info("client disconnected (%s)", app.state.limits.snapshot())
