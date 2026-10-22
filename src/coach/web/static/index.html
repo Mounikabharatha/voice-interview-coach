@@ -24,6 +24,7 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
   .dot.listening { background: var(--accent); box-shadow: 0 0 0 4px rgba(94,234,212,.15); }
   .dot.thinking  { background: var(--warn);   box-shadow: 0 0 0 4px rgba(251,191,36,.15); }
+  .dot.complete  { background: var(--ok, #4ade80); }
   #status { color: var(--muted); font-size: .8rem; font-family: var(--mono); }
   .spacer { margin-left: auto; }
 
@@ -124,7 +125,8 @@ let turnStart = null;        // performance.now() when the user's turn ended
 
 function setState(s) {
   statusEl.textContent = s;
-  dot.className = "dot" + (s === "listening" ? " listening" : s === "thinking" ? " thinking" : "");
+  dot.className = "dot" + (s === "listening" ? " listening"
+    : s === "thinking" ? " thinking" : s === "complete" ? " complete" : "");
 }
 
 function bubble(cls, who, text) {
@@ -255,6 +257,13 @@ async function start() {
         t.className = "verdict incomplete"; t.textContent = "interrupted"; last.appendChild(t); }
     }
     else if (m.type === "refused") { bubble("coach", "Demo limit", m.message); stop(); }
+    else if (m.type === "session_end") {
+      // Interview over. Release the microphone rather than sitting there listening to a
+      // room nobody is being interviewed in.
+      stop();
+      setState("complete");
+      $("hint").textContent = "Interview complete — press Start for a new one";
+    }
     else if (m.type === "report") renderReport(m);
     else if (m.type === "metrics") console.log("turn metrics", m.turn);
     else if (m.type === "error") bubble("coach", "Error", m.message).classList.add("err");
@@ -285,7 +294,7 @@ function stop() {
   if (micStream) micStream.getTracks().forEach((t) => t.stop());
   if (micCtx) micCtx.close();
   meterBar.style.width = "0";
-  setState("idle");
+  if (statusEl.textContent !== "complete") setState("idle");
 }
 
 const COMP_ORDER = ["situation", "ownership", "action", "result", "reflection"];

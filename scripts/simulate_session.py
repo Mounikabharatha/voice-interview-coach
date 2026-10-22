@@ -61,8 +61,18 @@ async def main() -> int:
     print(f"  {len(rendered)} answers ready\n")
 
     report: dict | None = None
-    coach_idle = asyncio.Event()
+    state = {"now": "connecting"}
     turns = 0
+
+    async def wait_until_listening(timeout: float) -> bool:
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline:
+            if report is not None:
+                return False
+            if state["now"] == "listening":
+                return True
+            await asyncio.sleep(0.2)
+        return False
 
     async with websockets.connect(WS_URL, max_size=None) as ws:
         async def reader() -> None:
@@ -83,12 +93,14 @@ async def main() -> int:
                     turns += 1
                     print(f"  YOU:   {m['text'][:80]}... [{m.get('verdict')}]")
                 elif t == "state":
-                    if m["state"] == "listening":
-                        coach_idle.set()
-                    else:
-                        coach_idle.clear()
+                    # Track the CURRENT state rather than edges. Waiting on an event that was
+                    # already set, then cleared just before the wait, deadlocks on a signal
+                    # that has already been and gone.
+                    state["now"] = m["state"]
                 elif t == "report":
                     report = m
+                elif t == "session_end":
+                    print("  <- SESSION_END — server is closing the connection")
                 elif t == "error":
                     print(f"  ERROR: {m['message']}")
 
@@ -101,28 +113,43 @@ async def main() -> int:
         for turn_no in range(MAX_TURNS):
             if report is not None:
                 break
-            coach_idle.clear()
-            try:
-                await asyncio.wait_for(coach_idle.wait(), timeout=45)
-            except asyncio.TimeoutError:
-                print("  (timed out waiting for the coach)")
+            if not await wait_until_listening(60):
+                if report is None:
+                    print("  (timed out waiting for the coach)")
                 break
             if report is not None:
                 break
             await asyncio.sleep(1.0)
             frames = rendered[turn_no % len(rendered)]
             print(f"\n-- turn {turn_no + 1} --")
+            closed = False
             for f in frames:
-                await ws.send(f)
+                try:
+                    await ws.send(f)
+                except Exception:
+                    # The server closes the socket once the report is delivered. That is the
+                    # intended end of a session, not a failure.
+                    closed = True
+                    break
                 await asyncio.sleep(FRAME_MS / 1000)
+            if closed:
+                break
             for _ in range(30):                       # trailing silence, lets the turn end
-                await ws.send(silence)
+                if report is not None:
+                    break
+                try:
+                    await ws.send(silence)
+                except Exception:
+                    break                                 # server closed after the report
                 await asyncio.sleep(FRAME_MS / 1000)
 
         # keep the socket alive while the wrap turn and background scoring finish
-        deadline = time.perf_counter() + 60
+        deadline = time.perf_counter() + 90
         while report is None and time.perf_counter() < deadline:
-            await ws.send(silence)
+            try:
+                await ws.send(silence)
+            except Exception:
+                break
             await asyncio.sleep(FRAME_MS / 1000)
 
         task.cancel()

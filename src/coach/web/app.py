@@ -192,6 +192,7 @@ async def ws(websocket: WebSocket) -> None:
     endpointer = Endpointer()
     barge_in = BargeInDetector()
     session = Session()
+    finished = asyncio.Event()      # set once the feedback report has been delivered
     # Barge-in is OFF by default. Without headphones the coach's own voice returns through
     # the microphone and cancels every reply — browser echo cancellation is not sufficient
     # on its own. A feature that silently breaks the app for most people is worse than a
@@ -289,6 +290,11 @@ async def ws(websocket: WebSocket) -> None:
                     log.info("turn produced no audio; will re-issue: %s", instruction[:60])
             if kind == "wrap":
                 await send_report()
+                # The interview is over. Without this the server went back to listening and
+                # sat there with the microphone live, which reads as "it is still asking me
+                # things" — and on a hosted instance it holds a session slot and keeps
+                # streaming audio for nothing.
+                finished.set()
         except asyncio.CancelledError:
             # Barge-in. Expected, not an error. TurnController's own finally block has
             # already closed the LLM stream and recorded what was said.
@@ -303,7 +309,12 @@ async def ws(websocket: WebSocket) -> None:
             endpointer.reset()
             barge_in.reset()
             with contextlib.suppress(Exception):
-                await send_event({"type": "state", "state": "listening"})
+                if finished.is_set():
+                    await send_event({"type": "state", "state": "complete"})
+                    await send_event({"type": "session_end"})
+                    await websocket.close()
+                else:
+                    await send_event({"type": "state", "state": "listening"})
 
     task = asyncio.create_task(transcribe())
     turn_task: asyncio.Task | None = None
