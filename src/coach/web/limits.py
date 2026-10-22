@@ -35,9 +35,12 @@ def _env_int(name: str, default: int) -> int:
 class Limits:
     """Tracks live sessions and the daily budget for one server process.
 
-    Process-local, which is the right scope here: the free tier runs a single instance, and a
-    shared counter would need a database this project does not otherwise require. If it is ever
-    scaled out, this becomes per-instance and the budget should be divided accordingly.
+    **Process-local, and that matters when choosing where to host.** On a single long-running
+    instance — Render, Fly, a VM — these counters mean exactly what they say. On a serverless
+    platform that scales to many instances, each gets its own counter, so the real daily
+    ceiling is the budget multiplied by however many instances happen to spin up. Divide the
+    budget accordingly, or accept weaker protection. A shared counter would need a database
+    this project does not otherwise require.
     """
 
     max_concurrent: int = field(default_factory=lambda: _env_int("COACH_MAX_CONCURRENT", 2))

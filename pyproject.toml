@@ -14,3 +14,8 @@ where = ["src"]
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+# Vercel loads this ASGI app directly rather than running `python -m coach`, so the uvicorn
+# entry point in __main__.py is unused there. Everything else is identical.
+[tool.vercel]
+entrypoint = "coach.web.app:app"
