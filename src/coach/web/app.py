@@ -29,18 +29,32 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from ..coachlogic import scoring
-from ..coachlogic.session import Session
-from ..config import Settings
-from ..llm.groq import GroqLLM
-from ..pipeline.endpoint import BargeInDetector, Endpointer
-from ..pipeline.turn import TurnController
-from ..stt.nvidia import NvidiaSTT
 from .limits import Limits
-from ..tts.nvidia import NvidiaTTS
+
+# Heavy imports behind a guard, and this is not defensiveness for its own sake.
+#
+# These pull in grpcio and the Riva client, native wheels that must match the host's Python
+# version and libc. If any of them raises at module scope the ASGI app object is never
+# created, every route 500s identically, and a serverless platform reports only
+# FUNCTION_INVOCATION_FAILED — which says nothing about which import failed, or whether it was
+# an import at all. Recording the traceback and serving it from /healthz turns one opaque
+# deploy failure into an answer.
+_BOOT_ERROR: str | None = None
+try:
+    from ..coachlogic import scoring
+    from ..coachlogic.session import Session
+    from ..config import Settings
+    from ..llm.groq import GroqLLM
+    from ..pipeline.endpoint import BargeInDetector, Endpointer
+    from ..pipeline.turn import TurnController
+    from ..stt.nvidia import NvidiaSTT
+    from ..tts.nvidia import NvidiaTTS
+except Exception:  # pragma: no cover - only on a broken deployment
+    import traceback
+    _BOOT_ERROR = traceback.format_exc()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("coach")
@@ -73,11 +87,21 @@ PLAYBACK_RATE_HZ = int(os.getenv("COACH_PLAYBACK_HZ", "22050"))
 MIC_FRAME_MS = 100  # must match FRAME_MS in static/mic-worklet.js
 
 app = FastAPI(title="Voice Interview Coach")
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+# StaticFiles raises at construction if the directory is missing, which would take the whole
+# module down. On a platform that bundles files for us, "missing" is a deployment question, not
+# a code one — so report it rather than crash.
+if STATIC.is_dir():
+    app.mount("/static", StaticFiles(directory=STATIC), name="static")
+else:
+    _BOOT_ERROR = (_BOOT_ERROR or "") + f"\nstatic directory not found at {STATIC}"
 
 
 @app.on_event("startup")
 async def startup() -> None:
+    if _BOOT_ERROR:
+        log.error("boot failed, not starting providers:\n%s", _BOOT_ERROR)
+        return
     settings = Settings.load()
     app.state.settings = settings
     app.state.stt = NvidiaSTT(settings.nvidia_api_key)
@@ -106,14 +130,29 @@ async def startup() -> None:
 
 
 @app.get("/")
-async def index() -> FileResponse:
+async def index():
+    if _BOOT_ERROR or not (STATIC / "index.html").is_file():
+        return PlainTextResponse(
+            "The server did not start correctly.\n\n"
+            "Diagnostics: /healthz\n\n" + (_BOOT_ERROR or "index.html missing"),
+            status_code=503,
+        )
     return FileResponse(STATIC / "index.html")
 
 
 @app.get("/healthz")
 async def healthz() -> dict:
-    return {"ok": True, "playback_rate_hz": PLAYBACK_RATE_HZ,
-            "limits": app.state.limits.snapshot()}
+    """Always answers, even when the app failed to boot — that is the whole point of it."""
+    if _BOOT_ERROR:
+        return {"ok": False, "error": "boot failed", "detail": _BOOT_ERROR.splitlines()[-12:]}
+    ready = hasattr(app.state, "limits")
+    return {
+        "ok": ready,
+        "playback_rate_hz": PLAYBACK_RATE_HZ,
+        "static_dir_present": STATIC.is_dir(),
+        "providers_ready": ready,
+        "limits": app.state.limits.snapshot() if ready else None,
+    }
 
 
 @app.websocket("/ws")
