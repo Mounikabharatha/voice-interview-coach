@@ -6,7 +6,15 @@ answer is thin, and gives you written feedback against a scoring rubric at the e
 
 You can interrupt it mid-sentence.
 
-> **Demo:** _(recording to be added — see [DEMO.md](DEMO.md))_
+**▶ Try it: <https://voice-interview-coach.onrender.com>** — microphone and headphones, nothing to install.
+
+> _(Demo recording to be added — see [DEMO.md](DEMO.md))_
+
+> **It runs on a free instance, so the first load takes about 50 seconds while the container
+> wakes.** After that it is immediate. The demo is also capped — 40 sessions a day, two at a
+> time, seven minutes each — because it spends my own free-tier API quota and a link that
+> answers "rate limit exceeded" is worse than no link. If you are refused, the project runs
+> locally in about two minutes; see below.
 
 Runs on free API tiers. No GPU, no model downloads, no native audio libraries. Clone it, add
 two free keys, and it runs the same on Windows, Linux and macOS.
@@ -246,11 +254,27 @@ pause that used to split one answer into two turns.
   not prevent it. There is a checkbox in the UI. This was found by testing on a real microphone
   after it had passed every automated test, because the tests fed digital silence and a real
   room never does.
-- **Free-tier limits.** Groq allows 1,000 requests/day. A session uses roughly 10–20.
+- **Free-tier limits.** Groq allows 1,000 requests/day; a session uses roughly 10–20. The
+  hosted demo therefore caps itself at 40 sessions/day, 2 concurrent, 7 minutes each, and
+  refuses politely rather than draining the quota. See
+  [`src/coach/web/limits.py`](src/coach/web/limits.py) and [DEPLOY.md](DEPLOY.md).
+- **The hosted instance sleeps when idle** — a free-plan constraint, roughly 50 s to wake.
 - **English only.** The recogniser and rubric assume English.
 - **Interrupted replies** are recorded as spoken up to the sentence boundary, not to the exact
   audio frame the user heard. Precise truncation needs playback position reported by the
   client.
+
+## Deployment
+
+Live on Render's free plan; `render.yaml` is committed and the blueprint needs only the two API
+keys. [DEPLOY.md](DEPLOY.md) covers that, a Vercel path, and why Netlify cannot host this at all
+(it does not support persistent WebSocket connections).
+
+Health and current usage are public:
+
+```bash
+curl https://voice-interview-coach.onrender.com/healthz
+```
 
 ## Design notes
 
