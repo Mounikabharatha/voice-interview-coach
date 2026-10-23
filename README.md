@@ -6,7 +6,6 @@ answer is thin, and gives you written feedback against a scoring rubric at the e
 
 You can interrupt it mid-sentence.
 
-
 Words appear while I am still speaking. The `waited 1512 ms` badge is the turn detector deciding
 I had finished. It ends on the scored feedback, which the session delivers before closing itself.
 
@@ -19,7 +18,6 @@ https://github.com/user-attachments/assets/115282c2-be47-4af8-87d9-c783c9845db5
 
 
 </details>
-
 
 **▶ Try it live: <https://voice-interview-coach.onrender.com>** — a microphone, nothing to install.
 

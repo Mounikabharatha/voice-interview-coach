@@ -132,3 +132,14 @@ Then view the README and check it plays.
 Reload the page first so the transcript starts empty. The session picks its three questions at
 random, so a second take gives different questions — which is why `demo-answers.md` has an
 answer prepared for all fourteen.
+
+---
+
+## Why `docs/demo.gif` is still in the repo
+
+The README no longer uses it — the uploaded mp4 plays with sound, which a GIF cannot do, so
+keeping both at the top was redundant.
+
+It is kept because **GIFs autoplay in a LinkedIn feed and videos do not**. A post with a moving
+image stops a scroll; a post with a play button usually does not. Use `docs/demo.gif` there and
+the mp4 here.
