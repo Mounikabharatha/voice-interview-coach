@@ -6,10 +6,9 @@ answer is thin, and gives you written feedback against a scoring rubric at the e
 
 You can interrupt it mid-sentence.
 
-<!-- DEMO VIDEO GOES HERE.
-     On github.com: click Edit on this README, drag the .mp4 onto this line, and GitHub
-     replaces it with a player that plays inline. See DEMO.md for the recording steps. -->
-_Demo video: recording in progress._
+**▶ [Watch the demo](docs/demo.mp4)** — 5 minutes, with sound. A full interview: words appearing
+while I speak, a pause mid-answer that does not cut me off, a follow-up when an answer is vague,
+and the written feedback at the end.
 
 **▶ Try it live: <https://voice-interview-coach.onrender.com>** — a microphone, nothing to install.
 

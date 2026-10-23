@@ -29,3 +29,6 @@ runs/*.jsonl
 # personal demo prep, not part of the project
 demo-answers.md
 resume-entry.md
+
+# the demo recording IS content and must be tracked
+!docs/demo.mp4
