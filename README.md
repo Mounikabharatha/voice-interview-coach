@@ -11,7 +11,10 @@ You can interrupt it mid-sentence.
 Words appear while I am still speaking. The `waited 1512 ms` badge is the turn detector deciding
 I had finished. It ends on the scored feedback, which the session delivers before closing itself.
 
-**With sound:** [90-second cut](docs/demo.mp4) · [full session, 5 minutes](docs/demo-full.mp4)
+_The GIF above has no sound — GIFs cannot carry an audio track._ For the audio, download
+[the 90-second cut](docs/demo.mp4?raw=1) or [the full 5-minute session](docs/demo-full.mp4?raw=1);
+GitHub will not play an mp4 in the browser from a repository file, so these download rather than
+stream.
 
 **▶ Try it live: <https://voice-interview-coach.onrender.com>** — a microphone, nothing to install.
 
