@@ -6,7 +6,6 @@ answer is thin, and gives you written feedback against a scoring rubric at the e
 
 You can interrupt it mid-sentence.
 
-![Watching the transcript appear mid-sentence, then the scored feedback at the end](docs/demo.gif)
 
 Words appear while I am still speaking. The `waited 1512 ms` badge is the turn detector deciding
 I had finished. It ends on the scored feedback, which the session delivers before closing itself.
