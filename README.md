@@ -8,9 +8,10 @@ You can interrupt it mid-sentence.
 
 **▶ [Watch the 90-second demo](docs/demo.mp4)** — with sound. Words appear while I am still
 speaking; the `waited 1512 ms` badge is the turn detector deciding I had finished; the coach
-answers and then asks a follow-up because the answer was thin.
+asks a follow-up because the answer was thin; and it ends on the scored feedback, which the
+session delivers before closing itself.
 
-[Full session, 5 minutes](docs/demo-full.mp4) if you want the whole thing.
+[Full session, 5 minutes](docs/demo-full.mp4) if you want all nine answers.
 
 **▶ Try it live: <https://voice-interview-coach.onrender.com>** — a microphone, nothing to install.
 
