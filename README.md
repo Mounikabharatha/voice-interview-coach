@@ -6,9 +6,11 @@ answer is thin, and gives you written feedback against a scoring rubric at the e
 
 You can interrupt it mid-sentence.
 
-**▶ [Watch the demo](docs/demo.mp4)** — 5 minutes, with sound. A full interview: words appearing
-while I speak, a pause mid-answer that does not cut me off, a follow-up when an answer is vague,
-and the written feedback at the end.
+**▶ [Watch the 90-second demo](docs/demo.mp4)** — with sound. Words appear while I am still
+speaking; the `waited 1512 ms` badge is the turn detector deciding I had finished; the coach
+answers and then asks a follow-up because the answer was thin.
+
+[Full session, 5 minutes](docs/demo-full.mp4) if you want the whole thing.
 
 **▶ Try it live: <https://voice-interview-coach.onrender.com>** — a microphone, nothing to install.
 
