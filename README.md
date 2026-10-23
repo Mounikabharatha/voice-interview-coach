@@ -14,7 +14,12 @@ I had finished. It ends on the scored feedback, which the session delivers befor
 https://github.com/user-attachments/assets/3dc3d8c1-83ce-4c34-afa6-2ed7a6a0ecac
 
 
-For all nine answers: [the full 5-minute session](docs/demo-full.mp4?raw=1) (downloads).
+<details><summary>Watch the full 5-minute session — all nine answers</summary>
+
+https://github.com/user-attachments/assets/115282c2-be47-4af8-87d9-c783c9845db5
+
+
+</details>
 
 
 **▶ Try it live: <https://voice-interview-coach.onrender.com>** — a microphone, nothing to install.
