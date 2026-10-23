@@ -6,9 +6,12 @@ answer is thin, and gives you written feedback against a scoring rubric at the e
 
 You can interrupt it mid-sentence.
 
-**▶ Try it: <https://voice-interview-coach.onrender.com>** — microphone and headphones, nothing to install.
+<!-- DEMO VIDEO GOES HERE.
+     On github.com: click Edit on this README, drag the .mp4 onto this line, and GitHub
+     replaces it with a player that plays inline. See DEMO.md for the recording steps. -->
+_Demo video: recording in progress._
 
-> _(Demo recording to be added — see [DEMO.md](DEMO.md))_
+**▶ Try it live: <https://voice-interview-coach.onrender.com>** — a microphone, nothing to install.
 
 > **It runs on a free instance, so the first load takes about 50 seconds while the container
 > wakes.** After that it is immediate. The demo is also capped — 40 sessions a day, two at a
@@ -21,27 +24,44 @@ two free keys, and it runs the same on Windows, Linux and macOS.
 
 ---
 
-## Quickstart
+## How it is put together
 
-```bash
-git clone https://github.com/Mounikabharatha/voice-interview-coach
-cd voice-interview-coach
-python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -r requirements.txt                   # also installs the package itself
-cp .env.example .env                              # then paste your two keys into it
-python -m coach
+```
+browser ──mic──▶ AudioWorklet ──16 kHz PCM16──▶ WebSocket ──▶ FastAPI
+  ▲   resample 48k→16k                                          │
+  │                                          ┌───────────────────┼──────────────────┐
+  │                                          ▼                   ▼                  ▼
+  │                                   Endpointer          NVIDIA ASR            Session
+  │                                  (silence + text)     (streaming)        (rubric, probes)
+  │                                          │                   │                  │
+  │                                          └────── turn end ───┴──────────────────┘
+  │                                                         │
+  │                                                         ▼
+  │                                           Groq LLM ──▶ Sentencizer ──▶ NVIDIA TTS
+  └────────────────◀── WebSocket ◀── PCM16 ◀───────────────────────────────────┘
 ```
 
-Open <http://localhost:8000>, press Start, allow the microphone. Headphones recommended.
+**All audio hardware lives in the browser.** The server never opens an audio device, so there
+is no PortAudio or native dependency to break on someone else's operating system. That single
+decision is what makes the cross-platform promise true rather than aspirational.
 
-Two free keys, neither needing a card: **[Groq](https://console.groq.com/keys)** for the
-language model, **[NVIDIA NIM](https://build.nvidia.com)** for speech.
+| Layer | Choice | Why |
+|---|---|---|
+| Speech to text | NVIDIA Nemotron ASR (Riva gRPC) | True streaming partials. Groq's Whisper is batch-only, which cannot support barge-in |
+| Language model | Groq `qwen/qwen3.8-27b` | Reasoning can be switched off — see below. Resolved at startup, not pinned |
+| Speech synthesis | NVIDIA Magpie (Riva gRPC) | Streams audio in chunks and cancels mid-sentence |
 
-Check them before anything else — this reports what actually answered, rather than what the
-docs claim:
+Each layer sits behind a small `Protocol` in `base.py`, so a provider can be swapped without
+touching the pipeline.
 
-```bash
-python scripts/check_providers.py
+```
+src/coach/
+  stt/ llm/ tts/        one provider interface + one implementation each
+  pipeline/             endpoint.py  turn detection and barge-in
+                        sentence.py  incremental sentence splitting
+                        turn.py      one conversational turn
+  coachlogic/           rubric.py  questions.py  scoring.py  session.py
+  web/                  app.py + static/
 ```
 
 ---
@@ -180,44 +200,27 @@ background and lands in the report, where nobody is waiting.
 
 ---
 
-## How it is put together
+## Quickstart
 
-```
-browser ──mic──▶ AudioWorklet ──16 kHz PCM16──▶ WebSocket ──▶ FastAPI
-  ▲   resample 48k→16k                                          │
-  │                                          ┌───────────────────┼──────────────────┐
-  │                                          ▼                   ▼                  ▼
-  │                                   Endpointer          NVIDIA ASR            Session
-  │                                  (silence + text)     (streaming)        (rubric, probes)
-  │                                          │                   │                  │
-  │                                          └────── turn end ───┴──────────────────┘
-  │                                                         │
-  │                                                         ▼
-  │                                           Groq LLM ──▶ Sentencizer ──▶ NVIDIA TTS
-  └────────────────◀── WebSocket ◀── PCM16 ◀───────────────────────────────────┘
+```bash
+git clone https://github.com/Mounikabharatha/voice-interview-coach
+cd voice-interview-coach
+python -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt                   # also installs the package itself
+cp .env.example .env                              # then paste your two keys into it
+python -m coach
 ```
 
-**All audio hardware lives in the browser.** The server never opens an audio device, so there
-is no PortAudio or native dependency to break on someone else's operating system. That single
-decision is what makes the cross-platform promise true rather than aspirational.
+Open <http://localhost:8000>, press Start, allow the microphone. Headphones recommended.
 
-| Layer | Choice | Why |
-|---|---|---|
-| Speech to text | NVIDIA Nemotron ASR (Riva gRPC) | True streaming partials. Groq's Whisper is batch-only, which cannot support barge-in |
-| Language model | Groq `qwen/qwen3.8-27b` | Reasoning can be switched off — see below. Resolved at startup, not pinned |
-| Speech synthesis | NVIDIA Magpie (Riva gRPC) | Streams audio in chunks and cancels mid-sentence |
+Two free keys, neither needing a card: **[Groq](https://console.groq.com/keys)** for the
+language model, **[NVIDIA NIM](https://build.nvidia.com)** for speech.
 
-Each layer sits behind a small `Protocol` in `base.py`, so a provider can be swapped without
-touching the pipeline.
+Check them before anything else — this reports what actually answered, rather than what the
+docs claim:
 
-```
-src/coach/
-  stt/ llm/ tts/        one provider interface + one implementation each
-  pipeline/             endpoint.py  turn detection and barge-in
-                        sentence.py  incremental sentence splitting
-                        turn.py      one conversational turn
-  coachlogic/           rubric.py  questions.py  scoring.py  session.py
-  web/                  app.py + static/
+```bash
+python scripts/check_providers.py
 ```
 
 ---

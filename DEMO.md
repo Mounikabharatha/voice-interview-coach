@@ -1,139 +1,134 @@
 # Recording the demo
 
-The demo video is the single highest-value thing in this repository. Most people who open it
-will watch that and read the first screen of the README, and nothing else. Budget an hour.
-
-**Wear headphones.** Not optional. Without them the coach's voice goes back into the microphone
-and can trigger barge-in mid-demo.
+The video is the highest-value thing in this repository. Most people who open it will watch
+that and read the first screen, and nothing else. Budget an hour.
 
 ---
 
-## What the video has to show
+## The problem to solve first: capturing the coach's voice
 
-Three things, in this order. Each one is a claim the README makes, and the video is the
-evidence.
+macOS screen recording captures **your microphone**, not what comes out of your speakers. So a
+plain `Cmd+Shift+5` recording has your voice and silence where the coach replies — in a video
+about a talking app.
 
-1. **Words appear while you are still speaking.** Proves the pipeline streams.
-2. **A pause mid-answer does not cut you off**, and a vague answer gets probed. This is the
-   hard part of the project and the thing nobody else's voice-bot demo shows.
-3. **You interrupt it mid-sentence and it stops instantly.**
+And you cannot simply use speakers instead of headphones, because then the microphone hears the
+coach too, the speech recogniser transcribes it, and it pollutes your answer.
 
-Then the feedback report at the end.
+**Use Loom's Chrome extension.** It records the browser tab *including tab audio*, plus your
+microphone, in one file. Free, no audio routing to set up, and the app already runs in Chrome.
 
-Target: **45 to 70 seconds.** Shorter than a minute is hard; longer and people stop watching.
+1. Install the **Loom** extension from the Chrome Web Store, sign in free
+2. Click the Loom icon → **Screen + Cam** or **Screen only**
+3. Recording type: **Current Tab**
+4. Turn **ON**: microphone, and **"Share tab audio"** (this is the setting that matters)
+5. Record
 
----
+Loom's free plan caps videos at 5 minutes, which is far more than you need.
 
-## Setup
-
-```bash
-cd ~/Documents/voice-interview-coach
-python -m coach
-```
-
-Wait for `ready on http://127.0.0.1:8000` in the terminal — that line means prewarming has
-finished. **Do not start recording before it appears**, or the first reply pays the cold-start
-cost and the demo looks a second slower than the project actually is.
-
-Open <http://localhost:8000>. Make the browser window about 1280×800 — big enough to read, small
-enough that the text is not tiny when scaled down.
+> **Alternative without an account:** install [BlackHole 2ch](https://existential.audio/blackhole/)
+> (free), create an Aggregate Device in Audio MIDI Setup combining your mic and BlackHole, and
+> record that with QuickTime. More setup, no sign-up.
 
 ---
 
-## Recording on macOS
+## Before you hit record
 
-Built in, no install:
+- [ ] **Headphones in** — keeps the coach's voice out of the microphone
+- [ ] Open <https://voice-interview-coach.onrender.com> and **wait for the page to load fully**
+      (if it has been idle it takes ~50 s to wake; do not record that)
+- [ ] Press Start once and say a word to confirm the mic works, then **reload** for a clean start
+- [ ] "Allow interrupting" left **unchecked**
+- [ ] Browser window about **1280×800** — big enough to read when scaled down
+- [ ] Close other tabs — the tab bar is in shot
+- [ ] Your answers open on your **phone**, not on screen
 
-1. **Cmd + Shift + 5**
-2. Choose **Record Selected Portion**, drag around the browser window
-3. Under **Options**, set **Microphone → MacBook Pro Microphone**. This is the step people
-   forget, and a silent demo of a voice app is worthless
-4. Click **Record**
+---
 
-Stop from the menu bar. It saves to the Desktop as `.mov`.
+## What the video must show
 
-> Screen recording records system audio poorly on macOS. With headphones on, the microphone
-> captures your voice but **not the coach's replies**. If the coach is inaudible in your
-> recording, use [OBS](https://obsproject.com) (free) with a Desktop Audio source, or add
-> subtitles for the coach's lines — the on-screen transcript already shows them.
+Three moments, in this order. Each is a claim the README makes.
+
+| Moment | Why it matters |
+|---|---|
+| Words appearing **while you speak** | Proves it streams rather than waiting |
+| **A 2-second pause mid-answer** that does not cut you off | The hard part, and nobody else's demo shows it |
+| The **feedback report** at the end | Proves it is a product, not a chatbot |
+
+Target **60–90 seconds**.
 
 ---
 
 ## The script
 
-Read this through once before recording. Do not read it aloud word for word — it should sound
-like someone actually being interviewed.
+**1.** Press **Start**, allow the microphone. The coach asks a question.
 
-**[Press Start. The coach greets you and asks its first question.]**
+**2.** Answer with **ANSWER A**, pausing where marked:
 
-**You:**
-> "I led the migration of our billing system to a new payments provider…"
+> I built a real-time voice interview coach. You speak an answer out loud and it listens while
+> you talk, replies out loud and scores you at the end. **⏸ (stop, count one-two)** I chose the
+> providers, wrote the pipeline, and measured every stage. I cut the reply time from about
+> three seconds to one and a half seconds, and I learned to test with a real microphone much
+> earlier.
 
-**[Now stop. Look away. Count two full seconds.]** ← *this is the money shot*
+> If the question does not fit, open with: *"The clearest example is a project I built recently."*
 
-> "…and it took about four months, with three teams involved. We cut failed payments by about
-> twelve percent in the first quarter."
+**3.** It asks the next question. Answer deliberately vaguely and **stop**:
 
-**[Coach acknowledges and asks the next question.]**
+> We worked on it as a team and it went pretty well in the end.
 
-**You** — answer this one deliberately vaguely:
-> "We worked on it as a team and it went pretty well in the end."
+It will come back with **"What was the measurable outcome?"** — that is the moment worth having
+on film.
 
-**[The coach will probe — something like "What was the measurable outcome?"]**
+**4.** Answer properly with **ANSWER C** from `demo-answers.md`, then **ANSWER D** for the last
+question. The report appears and the session **stops by itself**.
 
-**You** — start answering, then cut across it while it is still talking:
-> "Actually, sorry — let me redo that answer."
-
-**[It stops mid-word.]**
-
-Then either answer a final question, or stop the recording and cut to the report screen.
+**5.** Let the report sit on screen for 3 seconds, then stop recording.
 
 ---
 
-## The three moments to make sure you caught
+## Compress it
 
-Watch it back and check:
-
-- [ ] Text visibly appears **while** you are still speaking
-- [ ] The two-second pause did **not** trigger a reply
-- [ ] The coach **stopped mid-word** when you talked over it
-- [ ] The `reply ___ ms` counter in the top right is readable
-- [ ] The feedback report is on screen at the end
-
-If the pause did trigger a reply, pause a bit longer next take — the threshold is 900 ms after a
-sentence that sounds finished.
-
----
-
-## Turning it into a GIF for the README
-
-A GIF autoplays in the README; a video file does not. Keep it under about 10 MB.
+GitHub accepts up to **10 MB** per file in a README. A 90-second recording is usually 30–60 MB.
 
 ```bash
-brew install ffmpeg gifski
-
-ffmpeg -i ~/Desktop/demo.mov -vf "fps=12,scale=900:-1:flags=lanczos" -f yuv4mpegpipe - \
-  | gifski -o docs/demo.gif -
+brew install ffmpeg
 ```
 
-If it comes out too large, drop to `fps=10` or `scale=760`.
-
-Commit it and put it at the top of the README:
-
-```markdown
-![Demo](docs/demo.gif)
+```bash
+ffmpeg -i demo.mp4 -vf "scale=1280:-2" -c:v libx264 -crf 30 -preset slow -c:a aac -b:a 96k demo-small.mp4
+ls -lh demo-small.mp4
 ```
 
-A GIF has no sound, so also upload the `.mov` — drag it into a GitHub issue or release and use
-the URL GitHub gives back — and link it underneath:
-
-```markdown
-[Watch with audio](https://github.com/.../demo.mov)
-```
+Still over 10 MB? Raise `-crf 30` to `34`, or drop `scale=1280` to `scale=1024`.
 
 ---
 
-## If you want a second take
+## Put it in the README
 
-Restart the server between takes. The session picks its three questions at random, so a fresh
-run gives you different questions, and the conversation history starts clean.
+1. Open the repo on **github.com**
+2. Click **README.md** → the **pencil** icon to edit
+3. Find this line near the top:
+
+   ```
+   _Demo video: recording in progress._
+   ```
+4. **Delete that line** and **drag `demo-small.mp4` onto the empty line.** GitHub uploads it and
+   inserts a link that plays inline
+5. Scroll down → **Commit changes**
+
+Then view the README and check it plays.
+
+---
+
+## After it is up
+
+- Post it on **LinkedIn** — the draft is in `demo-answers.md`
+- Add the same video to your other project READMEs if you record those too
+
+---
+
+## If you re-record
+
+Reload the page first so the transcript starts empty. The session picks its three questions at
+random, so a second take gives different questions — which is why `demo-answers.md` has an
+answer prepared for all fourteen.
