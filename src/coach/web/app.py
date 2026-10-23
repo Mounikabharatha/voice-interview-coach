@@ -111,22 +111,35 @@ async def startup() -> None:
     # because spoken replies must be short — sharing it silently truncated every scoring
     # response mid-JSON. Different jobs, different budgets.
     app.state.scorer = GroqLLM(settings.groq_api_key, max_tokens=900, temperature=0.2)
-    # Worth ~940 ms on the speech connection alone. Paid here so it is never paid in front
-    # of a user — see coach/tts/nvidia.py.
-    # Resolve the model against the live catalogue BEFORE prewarming. Free-tier model ids
-    # are not stable — the project's original choice was retired about a month after it was
-    # measured — so a pinned id would fail on the first real turn instead of at startup.
-    model = await app.state.llm.resolve_model()
-    app.state.scorer.model = model
-    log.info("using Groq model: %s", model)
-
-    log.info("prewarming providers...")
-    await asyncio.gather(
-        app.state.tts.prewarm(), app.state.stt.prewarm(), app.state.llm.prewarm()
-    )
     app.state.limits = Limits()
-    log.info("limits: %s", app.state.limits.snapshot())
-    log.info("ready on http://%s:%d", settings.host, settings.port)
+    app.state.warm = asyncio.Event()
+
+    async def warm_up() -> None:
+        """Resolve the model and open the provider connections, off the critical path.
+
+        This used to block startup. On a host that sleeps when idle, every cold start then
+        made the visitor wait for a model lookup and three network round trips before the page
+        would render at all — on top of the container boot they were already waiting through.
+        None of it is needed to serve the page, only to serve the first *turn*, so it runs in
+        the background and the WebSocket handler waits on `app.state.warm` instead.
+        """
+        try:
+            # Free-tier model ids are not stable — the original choice here was retired about
+            # a month after it was measured — so resolve against the live catalogue.
+            model = await app.state.llm.resolve_model()
+            app.state.scorer.model = model
+            log.info("using Groq model: %s", model)
+            await asyncio.gather(
+                app.state.tts.prewarm(), app.state.stt.prewarm(), app.state.llm.prewarm()
+            )
+            log.info("providers warm")
+        except Exception:
+            log.exception("warm-up failed; the first turn will be slower")
+        finally:
+            app.state.warm.set()
+
+    asyncio.create_task(warm_up())
+    log.info("serving on http://%s:%d (warming in background)", settings.host, settings.port)
 
 
 @app.get("/")
@@ -148,6 +161,7 @@ async def healthz() -> dict:
     ready = hasattr(app.state, "limits")
     return {
         "ok": ready,
+        "warm": getattr(app.state, "warm", None) is not None and app.state.warm.is_set(),
         "playback_rate_hz": PLAYBACK_RATE_HZ,
         "static_dir_present": STATIC.is_dir(),
         "providers_ready": ready,
@@ -158,6 +172,13 @@ async def healthz() -> dict:
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
     await websocket.accept()
+
+    # Warm-up runs in the background at startup. A visitor who clicks Start within a second
+    # of the page appearing can arrive before it has finished; wait rather than talk to a
+    # half-initialised provider. Bounded, because a failed warm-up must not hang the session.
+    if not app.state.warm.is_set():
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(app.state.warm.wait(), timeout=20)
 
     allowed, refusal = app.state.limits.try_acquire()
     if not allowed:
