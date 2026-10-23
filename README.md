@@ -6,12 +6,12 @@ answer is thin, and gives you written feedback against a scoring rubric at the e
 
 You can interrupt it mid-sentence.
 
-**▶ [Watch the 90-second demo](docs/demo.mp4)** — with sound. Words appear while I am still
-speaking; the `waited 1512 ms` badge is the turn detector deciding I had finished; the coach
-asks a follow-up because the answer was thin; and it ends on the scored feedback, which the
-session delivers before closing itself.
+![Watching the transcript appear mid-sentence, then the scored feedback at the end](docs/demo.gif)
 
-[Full session, 5 minutes](docs/demo-full.mp4) if you want all nine answers.
+Words appear while I am still speaking. The `waited 1512 ms` badge is the turn detector deciding
+I had finished. It ends on the scored feedback, which the session delivers before closing itself.
+
+**With sound:** [90-second cut](docs/demo.mp4) · [full session, 5 minutes](docs/demo-full.mp4)
 
 **▶ Try it live: <https://voice-interview-coach.onrender.com>** — a microphone, nothing to install.
 
