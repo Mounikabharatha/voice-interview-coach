@@ -153,6 +153,22 @@ async def index():
     return FileResponse(STATIC / "index.html")
 
 
+@app.api_route("/ping", methods=["GET", "HEAD"])
+async def ping() -> PlainTextResponse:
+    """Two bytes, for uptime pingers keeping a sleeping host awake.
+
+    /healthz returns a JSON object describing provider state and spend limits, which is what a
+    human wants. A keepalive pinger does not want any of it — and cron-job.org disabled this
+    project's job with "output too large" after a cold start, because while a free Render
+    instance boots it serves its own HTML waiting page in place of the app's response, and
+    that page is bigger than the pinger's capture limit.
+
+    This route exists so the pinger can use HEAD, which has no body at all and therefore
+    cannot exceed any size limit, while GET still answers for anything that cannot send HEAD.
+    """
+    return PlainTextResponse("ok")
+
+
 @app.get("/healthz")
 async def healthz() -> dict:
     """Always answers, even when the app failed to boot — that is the whole point of it."""
